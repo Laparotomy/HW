@@ -1,1 +1,1 @@
-# HW
+# HW repository для навчвння
