@@ -1,0 +1,10 @@
+print("Hello World")
+a=input('Please enter number of students in class 1:')
+b=input('Please enter number of students in class 2:')
+c=input('Please enter number of students in class 1:')
+x = int(a)
+y = int(b)
+w = int(c)
+print('всього парт треба')
+t = (x)//2+(x)%2+(y)//2+(y)%2+(w)//2+(w)%2
+print(t)
