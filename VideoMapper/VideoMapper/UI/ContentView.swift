@@ -126,6 +126,12 @@ struct ContentView: View {
 
             TimecodeView(controller: controller)
 
+            if controller.externalDisplay != nil {
+                Image(systemName: "tv")
+                    .foregroundStyle(.green)
+                    .accessibilityLabel("Projector connected")
+            }
+
             Spacer()
 
             Picker("Stage mode", selection: $controller.stageMode) {
@@ -182,9 +188,7 @@ struct TimecodeView: View {
 
     var body: some View {
         TimelineView(.periodic(from: .now, by: 0.05)) { _ in
-            Text(timecode(controller.showTime))
-                .font(.system(.body, design: .monospaced))
-                .foregroundStyle(.secondary)
+            TimecodeView(controller: controller)
                 .accessibilityLabel("Show time")
         }
     }

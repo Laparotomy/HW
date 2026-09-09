@@ -134,6 +134,26 @@ an argument instead of mutating `size`.
 Envelopes rise instantly and fall at the route's smoothing rate, so a peak reads on
 the frame it happens and decays smoothly afterwards.
 
+## The projector is a second scene, not a mirror
+
+iOS mirrors the screen by default, which for this app would put sliders and corner
+handles on the wall. Declaring a scene for
+`UIWindowSceneSessionRoleExternalDisplayNonInteractive` replaces mirroring with a
+window the app controls: the phone keeps the editor, the projector gets output only.
+The same declaration serves HDMI and AirPlay — iOS presents both as an external
+screen — so there is one code path, not two.
+
+That scene is created and owned by UIKit, outside the SwiftUI hierarchy, and it has
+to reach the same show the phone is editing. That is why `ShowController` is a
+singleton: a `@StateObject` held in a view tree is not reachable from another scene's
+delegate.
+
+Both windows share one renderer and draw the same `RenderFrame`. `makeFrame()`
+caches for a few milliseconds because two displays ask for a frame at nearly the
+same instant, and building it twice would advance the audio modulation envelopes at
+double rate — the projector and the phone would visibly disagree about how far a
+beat had decayed.
+
 ## Storage
 
 ```

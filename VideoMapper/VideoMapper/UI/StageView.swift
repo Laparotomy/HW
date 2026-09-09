@@ -77,12 +77,7 @@ struct StageView: View {
 
     /// Letterboxes the canvas so what you see matches the projector's aspect ratio.
     private func fittedSize(in available: CGSize) -> CGSize {
-        let aspect = controller.project.canvasAspect
-        guard available.width > 0, available.height > 0, aspect > 0 else { return available }
-        if available.width / available.height > aspect {
-            return CGSize(width: available.height * aspect, height: available.height)
-        }
-        return CGSize(width: available.width, height: available.width / aspect)
+        available.fitting(aspect: controller.project.canvasAspect)
     }
 
     @ViewBuilder

@@ -30,6 +30,8 @@ final class ShowController: ObservableObject {
     @Published private(set) var statusMessage: String?
     /// Set when a follower's media does not match the host's.
     @Published private(set) var trackMismatch = false
+    /// Non-nil while a projector or TV is attached over HDMI or AirPlay.
+    @Published var externalDisplay: ExternalDisplayInfo?
 
     enum StageMode: String, CaseIterable, Identifiable {
         case move, warp
@@ -60,6 +62,13 @@ final class ShowController: ObservableObject {
     private var lastFollowerAudioCheck: Double = 0
 
     // MARK: - Init
+
+    /// The one controller the app runs on.
+    ///
+    /// A singleton because the projector's window lives in a *separate scene*, which
+    /// UIKit creates and owns; it has to reach the same show the phone is editing,
+    /// and a `@StateObject` in the SwiftUI hierarchy is not reachable from there.
+    static let shared = ShowController(project: ProjectStore.shared.loadAll().first ?? .demo)
 
     init(project: MappingProject = .demo) {
         self.project = project
@@ -120,8 +129,19 @@ final class ShowController: ObservableObject {
 
     // MARK: - Show clock
 
+    private var cachedFrame: RenderFrame?
+    private var cachedFrameTime: Double = -1
+
     /// Advances the clock and returns the frame to draw. Called once per display refresh.
+    ///
+    /// With a projector attached there are two views asking for a frame within a
+    /// millisecond or two of each other. Both must draw the *same* frame: building it
+    /// twice would advance the modulation envelopes at double rate, so the phone and
+    /// the projector would visibly disagree.
     func makeFrame() -> RenderFrame {
+        let now = HostClock.now
+        if let cachedFrame, now - cachedFrameTime < 0.004 { return cachedFrame }
+
         updateShowTime()
 
         var frame = RenderFrame()
@@ -141,6 +161,9 @@ final class ShowController: ObservableObject {
 
         if sync.role == .host { broadcastTransportIfNeeded() }
         if sync.role == .follower { reconcileFollowerAudio() }
+
+        cachedFrame = frame
+        cachedFrameTime = now
         return frame
     }
 

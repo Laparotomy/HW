@@ -69,6 +69,29 @@ On first use the app asks for the photo library (importing media), the microphon
 (Listen mode only), and the local network (device sync only). Denying any of them
 leaves the rest of the app working.
 
+## Connecting a projector
+
+The app gives the projector a **clean feed**: the mapped canvas on black, with no
+panels, handles or status bar, while the phone keeps the editing interface. Connect
+the projector and the second window appears on it automatically.
+
+| Connection | How | Notes |
+| --- | --- | --- |
+| **HDMI** | USB-C to HDMI (iPhone 15 and later) or Lightning Digital AV Adapter | Lowest latency; the reliable choice for a show |
+| **AirPlay** | Screen mirroring to an AirPlay projector or an Apple TV | Same clean feed, no cable. Adds latency and depends on Wi-Fi |
+| **Bluetooth** | Not possible for video | See below |
+
+**Bluetooth cannot carry video to a projector.** Its bandwidth is orders of magnitude
+short of what video needs, iOS exposes no video-out API over Bluetooth, and projectors
+do not accept video that way — a projector's Bluetooth is for audio. Wireless video
+from an iPhone means AirPlay.
+
+Bluetooth is still useful here, for sound: pair a Bluetooth speaker (or the
+projector's own speaker) in iOS Settings and the show's audio follows the system
+route with no setup in the app. Note that Bluetooth audio adds 100-200 ms of latency
+of its own — use **Visual delay** in the Audio tab to line the visuals back up, or
+run audio over a cable when timing matters.
+
 ## Running a two-device show
 
 1. Put both devices on the same Wi-Fi network.

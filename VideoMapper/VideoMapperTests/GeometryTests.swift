@@ -93,6 +93,41 @@ final class QuadTests: XCTestCase {
     }
 }
 
+final class LetterboxTests: XCTestCase {
+    /// The phone stage and the projector must letterbox identically, or what you
+    /// edit is not what the projector shows.
+    func testFitsInsideWithoutDistortion() {
+        // Wider container than the canvas: bars on the sides.
+        let wide = CGSize(width: 1000, height: 400).fitting(aspect: 16.0 / 9.0)
+        XCTAssertEqual(wide.height, 400, accuracy: 1e-6)
+        XCTAssertEqual(wide.width, 400 * 16.0 / 9.0, accuracy: 1e-6)
+
+        // Taller container: bars top and bottom.
+        let tall = CGSize(width: 320, height: 1000).fitting(aspect: 16.0 / 9.0)
+        XCTAssertEqual(tall.width, 320, accuracy: 1e-6)
+        XCTAssertEqual(tall.height, 320 / (16.0 / 9.0), accuracy: 1e-6)
+
+        // Exact match is unchanged.
+        let exact = CGSize(width: 1920, height: 1080).fitting(aspect: 16.0 / 9.0)
+        XCTAssertEqual(exact.width, 1920, accuracy: 1e-6)
+        XCTAssertEqual(exact.height, 1080, accuracy: 1e-6)
+    }
+
+    func testResultNeverExceedsContainer() {
+        for aspect in [0.5, 1.0, 16.0 / 9.0, 2.39] {
+            let container = CGSize(width: 812, height: 375)
+            let fitted = container.fitting(aspect: aspect)
+            XCTAssertLessThanOrEqual(fitted.width, container.width + 1e-6)
+            XCTAssertLessThanOrEqual(fitted.height, container.height + 1e-6)
+            XCTAssertEqual(fitted.width / fitted.height, aspect, accuracy: 1e-6)
+        }
+    }
+
+    func testDegenerateInputIsReturnedUnchanged() {
+        XCTAssertEqual(CGSize(width: 0, height: 0).fitting(aspect: 1.5), CGSize(width: 0, height: 0))
+    }
+}
+
 final class LayerTransformTests: XCTestCase {
 
     func testDefaultQuadIsCentred() {

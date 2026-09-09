@@ -2,8 +2,7 @@ import SwiftUI
 
 @main
 struct VideoMapperApp: App {
-    @StateObject private var controller = ShowController(
-        project: ProjectStore.shared.loadAll().first ?? .demo)
+    @StateObject private var controller = ShowController.shared
     @Environment(\.scenePhase) private var scenePhase
 
     var body: some Scene {

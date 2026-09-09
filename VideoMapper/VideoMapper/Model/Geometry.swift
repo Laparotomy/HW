@@ -128,6 +128,20 @@ enum Homography {
     }
 }
 
+extension CGSize {
+    /// Largest size with the given aspect ratio that fits inside the receiver.
+    ///
+    /// Used to letterbox the canvas identically on the phone's stage and on a
+    /// projector, so what you edit is what the projector shows.
+    func fitting(aspect: Double) -> CGSize {
+        guard width > 0, height > 0, aspect > 0 else { return self }
+        if width / height > aspect {
+            return CGSize(width: height * aspect, height: height)
+        }
+        return CGSize(width: width, height: width / aspect)
+    }
+}
+
 extension CGPoint {
     static func + (l: CGPoint, r: CGPoint) -> CGPoint { CGPoint(x: l.x + r.x, y: l.y + r.y) }
     static func - (l: CGPoint, r: CGPoint) -> CGPoint { CGPoint(x: l.x - r.x, y: l.y - r.y) }
