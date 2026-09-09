@@ -30,6 +30,16 @@
 		<true/>
 		<key>UISceneConfigurations</key>
 		<dict>
+			<!-- The main window keeps SwiftUI's own scene delegate; naming the role
+			     is required once UISceneConfigurations exists at all, otherwise the
+			     app has no configuration to build its primary scene from. -->
+			<key>UIWindowSceneSessionRoleApplication</key>
+			<array>
+				<dict>
+					<key>UISceneConfigurationName</key>
+					<string>Default Configuration</string>
+				</dict>
+			</array>
 			<key>UIWindowSceneSessionRoleExternalDisplayNonInteractive</key>
 			<array>
 				<dict>
