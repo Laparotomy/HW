@@ -188,7 +188,9 @@ struct TimecodeView: View {
 
     var body: some View {
         TimelineView(.periodic(from: .now, by: 0.05)) { _ in
-            TimecodeView(controller: controller)
+            Text(timecode(controller.showTime))
+                .font(.system(.body, design: .monospaced))
+                .foregroundStyle(.secondary)
                 .accessibilityLabel("Show time")
         }
     }

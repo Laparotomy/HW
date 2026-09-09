@@ -65,7 +65,7 @@ jobs:
           for f in "$SIM_REPORTS"/VideoMapper* "$HOST_REPORTS"/VideoMapper*; do
             echo "::error::App crashed on launch"
             echo "----- $f -----"
-            head -100 "$f"
+            head -400 "$f"
             FOUND=1
           done
           [ "$FOUND" -eq 0 ] || exit 1
@@ -97,7 +97,7 @@ jobs:
             case "$f" in
               *VideoMapper*|*xctest*)
                 echo "----- $f -----"
-                head -120 "$f"
+                head -400 "$f"
                 ;;
             esac
           done
