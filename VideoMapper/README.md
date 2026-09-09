@@ -49,19 +49,55 @@ step. Joined devices receive the show, follow the host's clock, and play their o
 copy of the same track, started together. Two phones side by side stay locked to
 each other rather than drifting apart over a set.
 
-## Building
+## Running it on your iPhone
 
-Open `VideoMapper.xcodeproj` in Xcode 16 or later, set your development team in the
-target's Signing settings, and run on an iPhone with iOS 17 or later.
-
-Run the tests with `⌘U`, or:
+You need a Mac with Xcode 16 or later and an iPhone on iOS 17 or later. A free Apple
+ID is enough; a paid developer account only changes how long the app stays installed.
 
 ```
-xcodebuild test -scheme VideoMapper -destination 'platform=iOS Simulator,name=iPhone 15'
+git clone https://github.com/Laparotomy/HW.git
+cd HW/VideoMapper
+open VideoMapper.xcodeproj
 ```
 
-Use a physical device for real work: multi-device sync needs the local network, and
-Listen mode needs the microphone. The simulator can run the renderer and the tests.
+1. Select the **VideoMapper** target → **Signing & Capabilities** → tick *Automatically
+   manage signing* and choose your team. With a free Apple ID, add it first under
+   Xcode → Settings → Accounts.
+2. **Change the bundle identifier.** `app.videomapper.VideoMapper` is a placeholder,
+   and Apple will refuse to register it if anyone else already has. Use your own
+   reverse-domain name, e.g. `com.yourname.VideoMapper`. Do the same for the test
+   target if you plan to run tests on the device.
+3. Plug in the iPhone. On the phone, enable **Settings → Privacy & Security →
+   Developer Mode**, then restart it.
+4. Pick your iPhone in the run-destination menu and press **⌘R**.
+5. The first launch is blocked as an untrusted developer. Clear it on the phone at
+   **Settings → General → VPN & Device Management** → trust your certificate, then
+   open the app again.
+
+A free Apple ID signs the app for **7 days**; after that, re-run from Xcode. A paid
+Apple Developer account extends this to a year and allows TestFlight distribution.
+
+### Building without a Mac
+
+CI builds an unsigned `.ipa` on every push (Actions → latest run → Artifacts). It
+cannot be installed as-is: sign it with your own Apple ID using Sideloadly or
+AltStore, which run on Windows as well as macOS. The same 7-day limit applies.
+
+## Testing
+
+`⌘U` in Xcode, or on the command line:
+
+```
+xcodebuild test -project VideoMapper.xcodeproj -scheme VideoMapper \
+  -destination "id=$(xcrun simctl list devices available | grep -m1 -o '[0-9A-F-]\{36\}')"
+```
+
+CI resolves a simulator the same way rather than hardcoding a device name, so it
+keeps working when the runner image changes.
+
+Use a physical device for real work: multi-device sync needs the local network,
+Listen mode needs the microphone, and only a projector shows whether a mapping
+actually lands on the surface. The simulator runs the renderer and the tests.
 
 ### Permissions
 
