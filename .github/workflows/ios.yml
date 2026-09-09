@@ -37,7 +37,41 @@ jobs:
             -project VideoMapper.xcodeproj \
             -scheme VideoMapper \
             -destination "id=${{ steps.sim.outputs.udid }}" \
+            -derivedDataPath build-sim \
             CODE_SIGNING_ALLOWED=NO
+
+      # Unit tests never open the app, so they cannot catch "it does not launch".
+      # Install it and check it is still alive a few seconds later; on failure print
+      # the simulator's crash report, which names the actual reason.
+      - name: Smoke launch
+        run: |
+          UDID="${{ steps.sim.outputs.udid }}"
+          APP=build-sim/Build/Products/Debug-iphonesimulator/VideoMapper.app
+          BUNDLE_ID=app.videomapper.VideoMapper
+
+          xcrun simctl boot "$UDID" 2>/dev/null || true
+          xcrun simctl bootstatus "$UDID" || true
+          xcrun simctl install "$UDID" "$APP"
+
+          rm -f ~/Library/Logs/DiagnosticReports/VideoMapper* 2>/dev/null || true
+          xcrun simctl launch "$UDID" "$BUNDLE_ID" || true
+          sleep 10
+
+          if xcrun simctl spawn "$UDID" launchctl list 2>/dev/null | grep -q "$BUNDLE_ID"; then
+            echo "::notice::App launched and stayed running"
+            exit 0
+          fi
+
+          echo "::error::App is not running after launch"
+          echo "===== crash reports ====="
+          for f in ~/Library/Logs/DiagnosticReports/VideoMapper*; do
+            [ -e "$f" ] || continue
+            echo "----- $f -----"
+            cat "$f"
+          done
+          echo "===== recent simulator log ====="
+          xcrun simctl spawn "$UDID" log show --last 3m --predicate 'process == "VideoMapper"' --style compact 2>/dev/null | tail -80 || true
+          exit 1
 
       - name: Run unit tests
         run: |
