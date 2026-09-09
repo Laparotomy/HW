@@ -25,7 +25,7 @@ self-contained and can be moved or shared without breaking links.
 | Opacity | 0–100% | |
 | Colour + mix | any colour | Tints the layer, or paints a solid colour layer |
 | Saturation / contrast | 0–200% | |
-| Texture | 6 patterns + your own image | Tiling, amount, and scroll speed |
+| Texture | 5 procedural patterns + your own image | Tiling, amount, and scroll speed |
 | Edge feather | 0–50% | Soft edges for blending overlapping projections |
 | Blend mode | normal, add, screen, multiply | |
 
