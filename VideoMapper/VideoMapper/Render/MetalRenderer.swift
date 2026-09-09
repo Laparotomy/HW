@@ -93,7 +93,9 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
             descriptor.label = "Layer \(mode.rawValue)"
             descriptor.vertexFunction = vertexFunction
             descriptor.fragmentFunction = fragmentFunction
-            let attachment = descriptor.colorAttachments[0]
+            // The subscript is optional in Swift, but slot 0 always exists on a
+            // freshly created descriptor.
+            let attachment = descriptor.colorAttachments[0]!
             attachment.pixelFormat = .bgra8Unorm
             attachment.isBlendingEnabled = true
             attachment.rgbBlendOperation = .add
