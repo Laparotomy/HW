@@ -41,39 +41,39 @@ jobs:
             CODE_SIGNING_ALLOWED=NO
 
       # Unit tests never open the app, so they cannot catch "it does not launch".
-      # Install it and check it is still alive a few seconds later; on failure print
-      # the simulator's crash report, which names the actual reason.
+      # A crash report is the only unambiguous evidence of a launch failure —
+      # process-liveness probes are unreliable against the simulator — so this step
+      # fails on a crash report and otherwise reports what it saw.
       - name: Smoke launch
         run: |
           UDID="${{ steps.sim.outputs.udid }}"
           APP=build-sim/Build/Products/Debug-iphonesimulator/VideoMapper.app
           BUNDLE_ID=app.videomapper.VideoMapper
+          SIM_REPORTS="$HOME/Library/Developer/CoreSimulator/Devices/$UDID/data/Library/Logs/DiagnosticReports"
+          HOST_REPORTS="$HOME/Library/Logs/DiagnosticReports"
 
           xcrun simctl boot "$UDID" 2>/dev/null || true
           xcrun simctl bootstatus "$UDID" || true
           xcrun simctl install "$UDID" "$APP"
 
-          rm -f ~/Library/Logs/DiagnosticReports/VideoMapper* 2>/dev/null || true
-          PID=$(xcrun simctl launch "$UDID" "$BUNDLE_ID" | awk -F': ' '{print $NF}' | tr -d '[:space:]')
-          echo "launched pid $PID"
-          sleep 10
+          rm -f "$SIM_REPORTS"/VideoMapper* "$HOST_REPORTS"/VideoMapper* 2>/dev/null || true
+          xcrun simctl launch "$UDID" "$BUNDLE_ID" || true
+          sleep 12
 
-          # Simulator apps are ordinary host processes, so ps is the reliable check.
-          if ps -p "$PID" > /dev/null 2>&1; then
-            echo "::notice::App launched and stayed running (pid $PID)"
-            exit 0
-          fi
-
-          echo "::error::App exited within 10s of launch"
-          echo "===== crash reports ====="
-          for f in ~/Library/Logs/DiagnosticReports/VideoMapper*; do
-            [ -e "$f" ] || continue
+          FOUND=0
+          shopt -s nullglob
+          for f in "$SIM_REPORTS"/VideoMapper* "$HOST_REPORTS"/VideoMapper*; do
+            echo "::error::App crashed on launch"
             echo "----- $f -----"
-            cat "$f"
+            head -100 "$f"
+            FOUND=1
           done
-          echo "===== recent simulator log ====="
-          xcrun simctl spawn "$UDID" log show --last 3m --predicate 'process == "VideoMapper"' --style compact 2>/dev/null | tail -80 || true
-          exit 1
+          [ "$FOUND" -eq 0 ] || exit 1
+
+          echo "::notice::App launched with no crash report"
+          xcrun simctl spawn "$UDID" log show --last 2m \
+            --predicate 'process == "VideoMapper" AND messageType == "error"' \
+            --style compact 2>/dev/null | tail -20 || true
 
       - name: Run unit tests
         run: |
@@ -82,17 +82,18 @@ jobs:
             -project VideoMapper.xcodeproj \
             -scheme VideoMapper \
             -destination "id=${{ steps.sim.outputs.udid }}" \
+            -derivedDataPath build-sim \
+            -resultBundlePath TestResults.xcresult \
             CODE_SIGNING_ALLOWED=NO
 
-      # Unsigned device build, packaged as an .ipa. It cannot be installed as-is —
-      # it has to be re-signed with the installer's own Apple ID (Sideloadly,
-      # AltStore) or replaced by a properly signed build from Xcode.
       - name: Diagnose test failure
         if: failure()
         run: |
+          UDID="${{ steps.sim.outputs.udid }}"
           echo "===== crash reports ====="
           shopt -s nullglob
-          for f in ~/Library/Logs/DiagnosticReports/*.ips ~/Library/Logs/DiagnosticReports/*.crash; do
+          for f in "$HOME/Library/Developer/CoreSimulator/Devices/$UDID/data/Library/Logs/DiagnosticReports"/* \
+                   "$HOME/Library/Logs/DiagnosticReports"/*; do
             case "$f" in
               *VideoMapper*|*xctest*)
                 echo "----- $f -----"
@@ -100,21 +101,21 @@ jobs:
                 ;;
             esac
           done
-          echo "===== xcresult activity ====="
-          RESULT=$(find ~/Library/Developer/Xcode/DerivedData -name "*.xcresult" -maxdepth 4 | head -1)
-          echo "bundle: $RESULT"
-          if [ -n "$RESULT" ]; then
-            xcrun xcresulttool get test-results summary --path "$RESULT" 2>/dev/null | head -60 || true
-          fi
+          echo "===== app log around the failure ====="
+          xcrun simctl spawn "$UDID" log show --last 5m \
+            --predicate 'process == "VideoMapper"' --style compact 2>/dev/null | tail -60 || true
 
       - name: Upload test results
         if: failure()
         uses: actions/upload-artifact@v4
         with:
           name: xcresult
-          path: ~/Library/Developer/Xcode/DerivedData/**/Logs/Test/*.xcresult
+          path: VideoMapper/TestResults.xcresult
           if-no-files-found: ignore
 
+      # Unsigned device build, packaged as an .ipa. It cannot be installed as-is —
+      # it has to be re-signed with the installer's own Apple ID (Sideloadly,
+      # AltStore) or replaced by a properly signed build from Xcode.
       - name: Package unsigned .ipa
         run: |
           set -o pipefail
