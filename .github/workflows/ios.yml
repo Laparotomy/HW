@@ -54,15 +54,17 @@ jobs:
           xcrun simctl install "$UDID" "$APP"
 
           rm -f ~/Library/Logs/DiagnosticReports/VideoMapper* 2>/dev/null || true
-          xcrun simctl launch "$UDID" "$BUNDLE_ID" || true
+          PID=$(xcrun simctl launch "$UDID" "$BUNDLE_ID" | awk -F': ' '{print $NF}' | tr -d '[:space:]')
+          echo "launched pid $PID"
           sleep 10
 
-          if xcrun simctl spawn "$UDID" launchctl list 2>/dev/null | grep -q "$BUNDLE_ID"; then
-            echo "::notice::App launched and stayed running"
+          # Simulator apps are ordinary host processes, so ps is the reliable check.
+          if ps -p "$PID" > /dev/null 2>&1; then
+            echo "::notice::App launched and stayed running (pid $PID)"
             exit 0
           fi
 
-          echo "::error::App is not running after launch"
+          echo "::error::App exited within 10s of launch"
           echo "===== crash reports ====="
           for f in ~/Library/Logs/DiagnosticReports/VideoMapper*; do
             [ -e "$f" ] || continue
@@ -85,6 +87,34 @@ jobs:
       # Unsigned device build, packaged as an .ipa. It cannot be installed as-is —
       # it has to be re-signed with the installer's own Apple ID (Sideloadly,
       # AltStore) or replaced by a properly signed build from Xcode.
+      - name: Diagnose test failure
+        if: failure()
+        run: |
+          echo "===== crash reports ====="
+          shopt -s nullglob
+          for f in ~/Library/Logs/DiagnosticReports/*.ips ~/Library/Logs/DiagnosticReports/*.crash; do
+            case "$f" in
+              *VideoMapper*|*xctest*)
+                echo "----- $f -----"
+                head -120 "$f"
+                ;;
+            esac
+          done
+          echo "===== xcresult activity ====="
+          RESULT=$(find ~/Library/Developer/Xcode/DerivedData -name "*.xcresult" -maxdepth 4 | head -1)
+          echo "bundle: $RESULT"
+          if [ -n "$RESULT" ]; then
+            xcrun xcresulttool get test-results summary --path "$RESULT" 2>/dev/null | head -60 || true
+          fi
+
+      - name: Upload test results
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: xcresult
+          path: ~/Library/Developer/Xcode/DerivedData/**/Logs/Test/*.xcresult
+          if-no-files-found: ignore
+
       - name: Package unsigned .ipa
         run: |
           set -o pipefail
