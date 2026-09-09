@@ -1,0 +1,73 @@
+name: iOS
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: Build, test and package
+    runs-on: macos-15
+    defaults:
+      run:
+        working-directory: VideoMapper
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Toolchain versions
+        run: |
+          xcodebuild -version
+          swift --version
+
+      - name: Choose a simulator
+        id: sim
+        run: |
+          xcrun simctl list devices available --json > /tmp/devices.json
+          UDID=$(python3 -c "import json; d=json.load(open('/tmp/devices.json'))['devices']; print(next(dev['udid'] for rt, ds in sorted(d.items()) if 'iOS' in rt for dev in ds if 'iPhone' in dev['name']))")
+          echo "Using simulator $UDID"
+          echo "udid=$UDID" >> "$GITHUB_OUTPUT"
+
+      - name: Build for simulator
+        run: |
+          set -o pipefail
+          xcodebuild build \
+            -project VideoMapper.xcodeproj \
+            -scheme VideoMapper \
+            -destination "id=${{ steps.sim.outputs.udid }}" \
+            CODE_SIGNING_ALLOWED=NO
+
+      - name: Run unit tests
+        run: |
+          set -o pipefail
+          xcodebuild test \
+            -project VideoMapper.xcodeproj \
+            -scheme VideoMapper \
+            -destination "id=${{ steps.sim.outputs.udid }}" \
+            CODE_SIGNING_ALLOWED=NO
+
+      # Unsigned device build, packaged as an .ipa. It cannot be installed as-is —
+      # it has to be re-signed with the installer's own Apple ID (Sideloadly,
+      # AltStore) or replaced by a properly signed build from Xcode.
+      - name: Package unsigned .ipa
+        run: |
+          set -o pipefail
+          xcodebuild build \
+            -project VideoMapper.xcodeproj \
+            -scheme VideoMapper \
+            -configuration Release \
+            -sdk iphoneos \
+            -derivedDataPath build \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY=""
+          mkdir -p Payload
+          cp -R build/Build/Products/Release-iphoneos/VideoMapper.app Payload/
+          zip -qry VideoMapper-unsigned.ipa Payload
+
+      - name: Upload .ipa
+        uses: actions/upload-artifact@v4
+        with:
+          name: VideoMapper-unsigned-ipa
+          path: VideoMapper/VideoMapper-unsigned.ipa
+          if-no-files-found: error
