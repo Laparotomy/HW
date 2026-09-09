@@ -106,7 +106,9 @@ See [ARCHITECTURE.md](ARCHITECTURE.md) for how the pieces fit together and why.
 
 ## Status
 
-The maths, persistence, clock estimation and modulation logic are covered by unit
-tests. The app has not yet been compiled or run against Xcode — it was written
-without access to an Apple toolchain, so expect to fix build diagnostics on first
-open. Rendering, capture and multi-device behaviour need a device to verify.
+Builds clean and all 28 unit tests pass on CI (`.github/workflows/ios.yml`, Xcode on
+a macOS runner). Every push also uploads an unsigned `.ipa` artifact.
+
+Still unverified: nothing has been run on real hardware. Rendering, media capture,
+microphone analysis and multi-device sync all need a device — a green build says the
+code compiles and its maths is right, not that the show looks correct on a wall.
