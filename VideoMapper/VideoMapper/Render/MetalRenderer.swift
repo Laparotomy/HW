@@ -16,6 +16,10 @@ struct LayerUniforms {
     var params2: SIMD4<Float>
     /// scrollX, scrollY, canvasAspect, unused
     var params3: SIMD4<Float>
+    /// generatorIndex, generatorSpeed, generatorScale, generatorComplexity
+    var params4: SIMD4<Float>
+    /// paletteIndex, generatorDrive, generatorVariation, unused
+    var params5: SIMD4<Float>
 }
 
 /// Immutable snapshot of everything needed to draw one frame.
@@ -38,6 +42,9 @@ struct ResolvedLayer {
     var quad: Quad
     var appearance: Appearance
     var content: LayerContent
+    /// Smoothed audio value driving a generator, 0...1. Zero for media layers and
+    /// for generators with no audio source selected.
+    var generatorDrive: Double = 0
 }
 
 /// Draws the layer stack into an `MTKView`.
@@ -193,6 +200,22 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
             params2: SIMD4(texture.pattern.shaderIndex, appearance.blendMode.shaderIndex,
                            Float(frame.showTime), hasCustom ? 1 : 0),
             params3: SIMD4(Float(texture.scrollX), Float(texture.scrollY),
-                           Float(frame.canvasAspect), 0))
+                           Float(frame.canvasAspect), 0),
+            params4: generatorParams(for: layer),
+            params5: paletteParams(for: layer))
+    }
+
+    private func generatorParams(for layer: ResolvedLayer) -> SIMD4<Float> {
+        guard let generator = layer.content.generator else { return .zero }
+        let settings = generator.settings.clamped()
+        return SIMD4(generator.kind.shaderIndex, Float(settings.speed),
+                     Float(settings.scale), Float(settings.complexity))
+    }
+
+    private func paletteParams(for layer: ResolvedLayer) -> SIMD4<Float> {
+        guard let generator = layer.content.generator else { return .zero }
+        let settings = generator.settings.clamped()
+        return SIMD4(settings.palette.shaderIndex, Float(layer.generatorDrive),
+                     Float(settings.variation), 0)
     }
 }

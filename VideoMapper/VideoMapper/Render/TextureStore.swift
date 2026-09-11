@@ -29,6 +29,8 @@ final class TextureStore {
         case .solid: return "solid"
         case .image(let ref): return "image:\(ref.filename)"
         case .video(let ref, _): return "video:\(ref.filename)"
+        // Only the kind matters: parameter changes are uniforms, not a new source.
+        case .generator(let kind, _): return "generator:\(kind.rawValue)"
         }
     }
 
@@ -80,7 +82,9 @@ final class TextureStore {
 
     private func makeSource(for layer: MappingLayer, projectID: UUID, store: ProjectStore) -> TextureSource {
         switch layer.content {
-        case .solid:
+        // A generator draws no media. It still needs a bound texture, and the shared
+        // white pixel is the cheapest one that gives the fragment stage alpha 1.
+        case .solid, .generator:
             return solid
         case .image(let ref):
             return ImageTextureSource(url: store.mediaURL(for: ref, projectID: projectID), device: device)

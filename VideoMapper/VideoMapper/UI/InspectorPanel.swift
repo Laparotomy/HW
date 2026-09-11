@@ -14,8 +14,11 @@ struct InspectorPanel: View {
                     lookSection(layer)
                     textureSection(layer)
                     if case .video(let ref, let playback) = layer.content {
-                    videoSection(layer: layer, ref: ref, playback: playback)
-                }
+                        videoSection(layer: layer, ref: ref, playback: playback)
+                    }
+                    if case .generator(let kind, let settings) = layer.content {
+                        generatorSection(layer: layer, kind: kind, settings: settings)
+                    }
                     modulationSection(layer)
                 }
                 .formStyle(.grouped)
@@ -178,6 +181,67 @@ struct InspectorPanel: View {
             Text(String(format: "%.0f x %.0f · %.1fs", ref.pixelSize.width, ref.pixelSize.height, ref.duration))
                 .font(.caption)
                 .foregroundStyle(.secondary)
+        }
+    }
+
+    // MARK: - Generator
+
+    @ViewBuilder
+    private func generatorSection(layer: MappingLayer, kind: GeneratorKind,
+                                  settings: GeneratorSettings) -> some View {
+        let kindBinding = Binding<GeneratorKind>(
+            get: { kind },
+            set: { newKind in
+                // Keep the dialled-in parameters when swapping kind: the settings are
+                // shared across the library on purpose, so switching is an A/B test
+                // rather than starting over.
+                controller.updateLayer(id: layer.id) { $0.content = .generator(newKind, settings) }
+            })
+        let settingsBinding = Binding<GeneratorSettings>(
+            get: { settings },
+            set: { newValue in
+                controller.updateLayer(id: layer.id) { $0.content = .generator(kind, newValue) }
+            })
+
+        Section("Source") {
+            Picker("Pattern", selection: kindBinding) {
+                ForEach(GeneratorKind.allCases) { Text($0.displayName).tag($0) }
+            }
+            Text(kind.detail)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
+            Picker("Palette", selection: settingsBinding.palette) {
+                ForEach(GeneratorPalette.allCases) { Text($0.displayName).tag($0) }
+            }
+            // Grouped to stay clear of ViewBuilder's ten-child limit in this section.
+            Group {
+                LabeledSlider(title: "Speed", value: settingsBinding.speed,
+                              range: GeneratorSettings.speedRange,
+                              format: { String(format: "%.2fx", $0) })
+                LabeledSlider(title: "Detail size", value: settingsBinding.scale,
+                              range: GeneratorSettings.scaleRange,
+                              format: { String(format: "%.1f", $0) })
+                LabeledSlider(title: "Complexity", value: settingsBinding.complexity,
+                              range: GeneratorSettings.complexityRange, format: percent)
+                LabeledSlider(title: "Variation", value: settingsBinding.variation,
+                              range: GeneratorSettings.variationRange,
+                              format: { String(format: "%.1f", $0) })
+            }
+
+            Picker("Driven by", selection: settingsBinding.audioSource) {
+                ForEach(ModulationSource.allCases) { Text($0.displayName).tag($0) }
+            }
+            if settings.audioSource != .none {
+                LabeledSlider(title: "Drive depth", value: settingsBinding.audioAmount,
+                              range: 0...1, format: percent)
+            }
+
+            Button("Reset to default") {
+                controller.updateLayer(id: layer.id) {
+                    $0.content = .generator(kind, kind.defaultSettings)
+                }
+            }
         }
     }
 

@@ -100,6 +100,8 @@ final class ShowController: ObservableObject {
                     guard let self else { return }
                     self.textureStore?.reconcile(project: self.project)
                     self.modulation.prune(activeRouteIDs: self.activeRouteIDs)
+                    self.modulation.pruneGenerators(
+                        activeLayerIDs: Set(self.project.layers.map(\.id)))
                 }
             }
             .store(in: &cancellables)
@@ -118,6 +120,9 @@ final class ShowController: ObservableObject {
             case .image(let ref): content = "image:\(ref.filename)"
             case .video(let ref, let playback):
                 content = "video:\(ref.filename):\(playback.rate):\(playback.loops):\(playback.startOffset):\(playback.followsShowClock):\(playback.volume)"
+            // Generator parameters reach the GPU as uniforms every frame, so only a
+            // change of kind is worth a reconcile.
+            case .generator(let kind, _): content = "generator:\(kind.rawValue)"
             }
             overlay = layer.appearance.texture.image?.id
         }
@@ -239,6 +244,11 @@ final class ShowController: ObservableObject {
         project.layers.append(layer)
         selectedLayerID = layer.id
         broadcastProject()
+    }
+
+    /// Adds a generator layer from the library, filling the canvas.
+    func addGeneratorLayer(_ kind: GeneratorKind) {
+        addLayer(MappingLayer.make(generator: kind))
     }
 
     func addColorLayer() {
@@ -563,7 +573,8 @@ extension ShowController: SyncSessionDelegate {
                 switch layer.content {
                 case .video(_, let playback): layer.content = .video(resolved, playback)
                 case .image: layer.content = .image(resolved)
-                case .solid: break
+                // Unreachable: neither carries media, so the guard above returned.
+                case .solid, .generator: break
                 }
             } else {
                 // Draw the layer as a colour block rather than dropping it: the

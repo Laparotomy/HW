@@ -36,10 +36,13 @@ enum LayerContent: Codable, Equatable {
     case solid
     case image(MediaReference)
     case video(MediaReference, VideoPlayback)
+    /// A procedural abstract source, synthesised in the shader. Carries no media,
+    /// so a project using generators stays a few kilobytes of JSON.
+    case generator(GeneratorKind, GeneratorSettings)
 
     var media: MediaReference? {
         switch self {
-        case .solid: return nil
+        case .solid, .generator: return nil
         case .image(let ref): return ref
         case .video(let ref, _): return ref
         }
@@ -50,10 +53,16 @@ enum LayerContent: Codable, Equatable {
         case .solid: return "Colour"
         case .image(let ref): return ref.displayName
         case .video(let ref, _): return ref.displayName
+        case .generator(let kind, _): return kind.displayName
         }
     }
 
     var isVideo: Bool { if case .video = self { return true }; return false }
+
+    var generator: (kind: GeneratorKind, settings: GeneratorSettings)? {
+        if case .generator(let kind, let settings) = self { return (kind, settings) }
+        return nil
+    }
 }
 
 /// Position, size and warp of a layer.
@@ -129,6 +138,18 @@ struct MappingLayer: Codable, Equatable, Identifiable {
             appearance.tint = RGBAColor(red: 1, green: 1, blue: 1)
             appearance.tintAmount = 1
         }
+    }
+
+    /// Creates a generator layer filling the whole canvas.
+    ///
+    /// Generators are backdrops far more often than they are objects, and unlike a
+    /// clip they have no aspect ratio of their own to preserve, so covering the
+    /// canvas is the useful default. Warp it down afterwards if you want a panel.
+    static func make(generator kind: GeneratorKind) -> MappingLayer {
+        var layer = MappingLayer(name: kind.displayName,
+                                 content: .generator(kind, kind.defaultSettings))
+        layer.transform.size = CGSize(width: 1, height: 1)
+        return layer
     }
 
     /// Creates a layer sized to the media's aspect ratio inside a canvas of `canvasAspect`.

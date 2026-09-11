@@ -9,6 +9,8 @@ struct ModulationOffsets {
     var tintAmount: Double = 0
     var textureAmount: Double = 0
     var rotation: Double = 0
+    /// Audio value driving a generator's own reactivity, 0...1.
+    var generatorDrive: Double = 0
 }
 
 /// Turns audio features into per-layer parameter offsets.
@@ -19,12 +21,23 @@ struct ModulationOffsets {
 final class ModulationEngine {
     /// Envelope state per route id, so smoothing survives across frames.
     private var envelopes: [UUID: Double] = [:]
+    /// Envelope state for generator drive, keyed by layer id. Generator reactivity is
+    /// a property of the layer rather than a route, so it needs its own store.
+    private var generatorEnvelopes: [UUID: Double] = [:]
 
-    func reset() { envelopes.removeAll() }
+    func reset() {
+        envelopes.removeAll()
+        generatorEnvelopes.removeAll()
+    }
 
     /// Drops state for routes that no longer exist.
     func prune(activeRouteIDs: Set<UUID>) {
         envelopes = envelopes.filter { activeRouteIDs.contains($0.key) }
+    }
+
+    /// Drops generator envelopes for layers that are gone.
+    func pruneGenerators(activeLayerIDs: Set<UUID>) {
+        generatorEnvelopes = generatorEnvelopes.filter { activeLayerIDs.contains($0.key) }
     }
 
     func offsets(for layer: MappingLayer, features: AudioFeatures,
@@ -57,7 +70,44 @@ final class ModulationEngine {
             case .rotation: offsets.rotation += delta * .pi / 4
             }
         }
+
+        offsets.generatorDrive = generatorDrive(for: layer, features: features,
+                                                showTime: showTime, fallbackBPM: fallbackBPM)
         return offsets
+    }
+
+    /// A generator's built-in reactivity, separate from the route list.
+    ///
+    /// Routes drive shape and look; this drives the pattern itself, which is the
+    /// thing you actually want reacting when the source is synthetic. Keeping it on
+    /// the layer means a beat-locked strobe is one picker away instead of a routing
+    /// exercise.
+    private func generatorDrive(for layer: MappingLayer, features: AudioFeatures,
+                                showTime: Double, fallbackBPM: Double) -> Double {
+        guard let generator = layer.content.generator else {
+            generatorEnvelopes.removeValue(forKey: layer.id)
+            return 0
+        }
+        let settings = generator.settings
+        guard settings.audioSource != .none, settings.audioAmount > 0 else {
+            generatorEnvelopes.removeValue(forKey: layer.id)
+            return 0
+        }
+
+        var value = features.value(for: settings.audioSource)
+        if settings.audioSource == .beat, features.bpm == 0, fallbackBPM > 0 {
+            let period = 60.0 / fallbackBPM
+            let phase = (showTime / period).truncatingRemainder(dividingBy: 1)
+            value = pow(1 - phase, 2)
+        }
+
+        // Same rise-instantly, fall-smoothly envelope the routes use, at a fixed
+        // release: a generator's drive is a visual accent, not a mix control.
+        let previous = generatorEnvelopes[layer.id] ?? 0
+        let smoothed = value > previous ? value : previous * 0.75 + value * 0.25
+        generatorEnvelopes[layer.id] = smoothed
+
+        return min(1, max(0, smoothed * settings.audioAmount))
     }
 
     /// Applies offsets and clamps everything into a drawable range.
@@ -75,6 +125,7 @@ final class ModulationEngine {
         return ResolvedLayer(id: layer.id,
                              quad: transform.quad(scale: scale),
                              appearance: appearance,
-                             content: layer.content)
+                             content: layer.content,
+                             generatorDrive: offsets.generatorDrive)
     }
 }

@@ -11,9 +11,44 @@ dragging applies a true projective transform (a homography), so pulling one corn
 foreshortens the whole image the way a real projector does — which is what makes an
 image sit flat on an angled wall instead of looking like a skewed rectangle.
 
+**Built-in source library.** Twelve abstract sources, generated on the GPU rather
+than played back from video files:
+
+| | | |
+| --- | --- | --- |
+| **Plasma** — flowing colour field | **Clouds** — drifting fractal smoke | **Tunnel** — receding depth |
+| **Kaleidoscope** — mirrored symmetry | **Cells** — organic cracked cells | **Rings** — outward pulses |
+| **Waves** — interfering wavefronts | **Grid** — perspective horizon | **Starfield** — streaming points |
+| **Aurora** — swaying curtains | **Metaballs** — merging blobs | **Strobe** — beat-locked flashes |
+
+Each has a palette (8 ramps), speed, detail size, complexity and variation, and can
+be driven directly by the music. Because a source is computed rather than decoded,
+it has no resolution limit, never loops, adds nothing to the size of a show, and
+needs no transfer to a second device — a follower phone reproduces it exactly from
+the show clock alone. **Layers → Sources** opens the library.
+
 **Manage media.** Import clips and stills from the photo library or the Files app.
 Each show keeps its own copy of its media in its own folder, so a show is
 self-contained and can be moved or shared without breaking links.
+
+### Adding your own footage
+
+The library covers abstract backdrops; for real footage, import your own. Anything
+AVFoundation can open works (H.264/HEVC in `.mov` or `.mp4`, ProRes). Sites with
+genuinely free, commercially usable clips — check the licence on each file, it
+varies per upload:
+
+| Source | Licence |
+| --- | --- |
+| [Mixkit](https://mixkit.co/free-stock-video/) | Mixkit licence, free for commercial use, no attribution |
+| [Pexels Videos](https://www.pexels.com/videos/) | Pexels licence, free for commercial use |
+| [Pixabay](https://pixabay.com/videos/) | Pixabay content licence |
+| [Videvo](https://www.videvo.net/) | Mixed; filter to "Free" and read the per-clip terms |
+| [Internet Archive](https://archive.org/details/movies) | Mixed; public-domain collections are the useful part |
+
+Download on the Mac or the phone, drop the files into Photos or Files, then import
+them through **Layers → Media**. For projection, dark clips with a few bright
+elements read far better on a wall than bright, busy ones.
 
 **Change size, colour, texture and intensity.** Per layer:
 
@@ -25,7 +60,8 @@ self-contained and can be moved or shared without breaking links.
 | Opacity | 0–100% | |
 | Colour + mix | any colour | Tints the layer, or paints a solid colour layer |
 | Saturation / contrast | 0–200% | |
-| Texture | 5 procedural patterns + your own image | Tiling, amount, and scroll speed |
+| Texture | 5 procedural overlays + your own image | Tiling, amount, and scroll speed |
+| Source controls | generator layers only | Palette, speed, detail, complexity, variation |
 | Edge feather | 0–50% | Soft edges for blending overlapping projections |
 | Blend mode | normal, add, screen, multiply | |
 
@@ -42,7 +78,9 @@ nudged mid-set.
 
 Audio is analysed on device (FFT into bass/mid/treble bands, plus onset-based beat
 and tempo detection). Any band can be routed to any parameter — bass to intensity,
-beat to size, treble to texture — with adjustable depth and release.
+beat to size, treble to texture — with adjustable depth and release. Generator
+layers additionally have their own **Driven by** control, which feeds the audio
+into the pattern itself rather than into the layer's shape.
 
 **Sync across devices.** One device hosts; others join over Wi-Fi with no pairing
 step. Joined devices receive the show, follow the host's clock, and play their own
@@ -154,7 +192,7 @@ by eye during soundcheck.
 VideoMapper/
   App/      ShowController — owns the project, clock, audio and peer link
   Model/    Project, layers, transforms, homography maths, persistence
-  Render/   Metal renderer, shaders, video/image texture sources
+  Render/   Metal renderer, shaders, generator library, texture sources
   Audio/    Playback, FFT analysis, beat tracking, modulation routing
   Sync/     Multipeer transport, clock estimation, message types
   UI/       SwiftUI screens
@@ -165,9 +203,13 @@ See [ARCHITECTURE.md](ARCHITECTURE.md) for how the pieces fit together and why.
 
 ## Status
 
-Builds clean and all 28 unit tests pass on CI (`.github/workflows/ios.yml`, Xcode on
-a macOS runner). Every push also uploads an unsigned `.ipa` artifact.
+Builds clean and all 54 unit tests pass on CI (`.github/workflows/ios.yml`, Xcode on
+a macOS runner), which also launches the app in a simulator to catch crashes that
+compile fine. Every push uploads an unsigned `.ipa` artifact.
 
-Still unverified: nothing has been run on real hardware. Rendering, media capture,
-microphone analysis and multi-device sync all need a device — a green build says the
-code compiles and its maths is right, not that the show looks correct on a wall.
+Verified on device: the app builds, installs and runs on an iPhone.
+
+Still unverified on hardware: how each generator actually looks projected, media
+capture, microphone analysis, projector output and multi-device sync. A green build
+says the code compiles and its maths is right, not that the show looks correct on a
+wall.

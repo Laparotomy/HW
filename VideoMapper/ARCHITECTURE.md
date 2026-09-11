@@ -67,6 +67,51 @@ bridging header. `LayerUniforms` exists in both `MetalRenderer.swift` and
 `TextureStore` rebuilds a layer's GPU resources only when its *content* fingerprint
 changes, so moving a slider never re-decodes a video.
 
+## Abstract sources are generated, not shipped
+
+The source library is twelve fragment-shader functions, not twelve video files. That
+choice falls out of what projection mapping actually needs:
+
+- **Resolution.** A generator is evaluated per pixel at whatever the output is. A
+  1080p file fed to a 4K projector is an upscale; a generator is not.
+- **Duration.** There is no clip to loop, so there is no loop point to hide and no
+  seek to perform.
+- **Size.** Twelve abstract loops at a usable quality is a few hundred megabytes in
+  the app and in every backup of it. The library as written is about 300 lines of
+  MSL.
+- **Synchronisation, which is the real win.** A generator is a pure function of
+  `(uv, showTime)`. Two devices given the same show time compute the same frame,
+  bit for bit, with no seeking, no drift correction and nothing to transfer. A
+  follower phone reproduces a generator-only show perfectly from a clock anchor and
+  a few kilobytes of JSON — the media-distribution problem simply does not arise.
+- **Licensing.** Nothing in the library belongs to anyone else.
+
+The cost is fill rate. Every generator is evaluated for every covered pixel, every
+frame, and the expensive ones (`clouds` domain-warps noise three times, `cells` runs
+a 3×3 voronoi search) are meaningfully heavier than sampling a video texture. The
+`complexity` control exists mostly as a fill-rate dial: octaves fade in with it
+rather than switching on, so it can be pulled down on an older device without a
+visible step.
+
+Generators reuse the existing path rather than adding a second one. The layer still
+binds the shared 1×1 white texture, still goes through one draw call, and the
+fragment shader substitutes the generated colour for the sampled one before the rest
+of the chain — saturation, tint, texture overlay, feather, blend — runs unchanged.
+So a generator is adjustable in exactly the same ways a clip is, and none of the
+compositing code knows generators exist.
+
+Two indices have to stay stable: `GeneratorKind.shaderIndex` and
+`GeneratorPalette.shaderIndex` are the dispatch values in `Shaders.metal`. Projects
+store the kind by *name*, so renumbering would not corrupt a saved show, but it
+would make a running shader draw the wrong pattern with nothing failing. The unit
+tests pin the indices and the raw values for that reason.
+
+Generator reactivity is deliberately not a modulation route. Routes drive a layer's
+shape and look; a generator wants the audio inside the pattern, so
+`GeneratorSettings` carries its own source and depth and `ModulationEngine` keeps a
+separate envelope per layer for it. A beat-locked strobe is then a picker away
+instead of a routing exercise.
+
 ## Video is slaved, not just played
 
 `VideoTextureSource` does not simply call `play()`. Every frame it compares the
@@ -173,7 +218,10 @@ layer — the mapping stays visible so the operator can see what is absent.
 ## Known limits
 
 - Multipeer Connectivity practically limits a session to around eight devices.
-- Media is not transferred between devices; each needs its own copy.
+- Media is not transferred between devices; each needs its own copy. Generator
+  layers are exempt — they carry no media at all.
+- Generators are fill-rate bound. A stack of several full-canvas generators on an
+  older device will cost frames where the same stack of video layers would not.
 - The host is authoritative. A follower can edit locally, but the next host broadcast
   replaces its project.
 - Beat detection is unreliable on sparse or heavily rubato music.

@@ -9,6 +9,7 @@ struct LayersPanel: View {
     @ObservedObject var controller: ShowController
     @State private var pickerItems: [PhotosPickerItem] = []
     @State private var isImporting = false
+    @State private var isBrowsingGenerators = false
     @State private var importError: String?
 
     var body: some View {
@@ -25,6 +26,9 @@ struct LayersPanel: View {
             }
             .listStyle(.plain)
             .environment(\.editMode, .constant(.active))
+        }
+        .sheet(isPresented: $isBrowsingGenerators) {
+            GeneratorBrowser(controller: controller)
         }
         .photosPicker(isPresented: $isImporting, selection: $pickerItems,
                       maxSelectionCount: 8, matching: .any(of: [.images, .videos]))
@@ -46,11 +50,18 @@ struct LayersPanel: View {
     }
 
     private var header: some View {
-        HStack(spacing: 16) {
+        // Three add-buttons plus the duplicate action is a lot for a phone-width
+        // column, so the row runs at small control size and the labels never wrap.
+        HStack(spacing: 8) {
             Button {
                 isImporting = true
             } label: {
                 Label("Media", systemImage: "photo.on.rectangle.angled")
+            }
+            Button {
+                isBrowsingGenerators = true
+            } label: {
+                Label("Sources", systemImage: "sparkles.rectangle.stack")
             }
             Button {
                 controller.addColorLayer()
@@ -68,6 +79,8 @@ struct LayersPanel: View {
             }
         }
         .buttonStyle(.bordered)
+        .controlSize(.small)
+        .lineLimit(1)
         .padding(.horizontal)
         .padding(.vertical, 8)
     }
