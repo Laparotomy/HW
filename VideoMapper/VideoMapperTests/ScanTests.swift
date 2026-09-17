@@ -106,12 +106,16 @@ final class DepthGridTests: XCTestCase {
     /// missing reading invents a surface, and an invented surface bends the warp the
     /// wrong way with no sign that anything went wrong.
     func testAMissingReadingPoisonsItsNeighbourhood() {
-        var depths = Array(repeating: 2.0, count: 9)
-        depths[4] = 0
-        let grid = DepthGrid(columns: 3, rows: 3, depths: depths)
+        // 5 x 5 rather than 3 x 3: on the smaller grid the centre sample is a corner
+        // of every cell, so a hole there refuses the whole image — correctly, but it
+        // leaves nowhere to check that the refusal is local.
+        var depths = Array(repeating: 2.0, count: 25)
+        depths[12] = 0
+        let grid = DepthGrid(columns: 5, rows: 5, depths: depths)
         XCTAssertNil(grid.depth(at: CGPoint(x: 0.5, y: 0.5)))
-        // The far corner is untouched by the hole.
+        // A corner well away from the hole still reads.
         XCTAssertEqual(grid.depth(at: CGPoint(x: 1, y: 0)) ?? .nan, 2, accuracy: 1e-12)
+        XCTAssertEqual(grid.depth(at: CGPoint(x: 0, y: 1)) ?? .nan, 2, accuracy: 1e-12)
     }
 
     func testSamplingOutsideTheImageReturnsNothing() {
