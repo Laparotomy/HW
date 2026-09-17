@@ -58,10 +58,6 @@ struct AudioSettings: Codable, Equatable {
 
     init() {}
 
-    init(name: String) {
-        self.name = name
-    }
-
     /// Decoded field by field with defaults, so a show saved before `tempoMode`
     /// existed still opens instead of failing to decode.
     init(from decoder: Decoder) throws {
@@ -103,6 +99,10 @@ struct MappingProject: Codable, Equatable, Identifiable {
     var modifiedAt: Date = Date()
 
     init() {}
+
+    init(name: String) {
+        self.name = name
+    }
 
     /// Decoded field by field with defaults, so every show saved by an earlier
     /// version still opens. This struct has gained fields three times now; a
