@@ -1,3 +1,4 @@
+import MediaPlayer
 import SwiftUI
 import UniformTypeIdentifiers
 
@@ -6,6 +7,7 @@ struct AudioPanel: View {
     @ObservedObject var controller: ShowController
     @ObservedObject private var audio: AudioEngineController
     @State private var isPickingTrack = false
+    @State private var isPickingFromLibrary = false
     @State private var importError: String?
 
     init(controller: ShowController) {
@@ -27,8 +29,21 @@ struct AudioPanel: View {
                         }
                     }
                     Spacer()
-                    Button("Choose") { isPickingTrack = true }
-                        .buttonStyle(.bordered)
+                    Menu {
+                        Button {
+                            chooseFromLibrary()
+                        } label: {
+                            Label("Music library", systemImage: "music.note.list")
+                        }
+                        Button {
+                            isPickingTrack = true
+                        } label: {
+                            Label("Files", systemImage: "folder")
+                        }
+                    } label: {
+                        Text("Choose")
+                    }
+                    .buttonStyle(.bordered)
                 }
 
                 Picker("Clock", selection: Binding(
@@ -106,6 +121,70 @@ struct AudioPanel: View {
                     .foregroundStyle(.secondary)
             }
 
+            Section("While the music plays") {
+                Toggle("Animate only while music plays", isOn: Binding(
+                    get: { controller.project.audio.animateOnlyWithMusic },
+                    set: { controller.project.audio.animateOnlyWithMusic = $0 }))
+                    .disabled(!controller.musicGateApplies)
+
+                if !controller.musicGateApplies {
+                    Text("Only applies on the Track and Listen clocks — free run has "
+                         + "no music to wait for.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                } else if controller.project.audio.clockSource == .listen
+                            || controller.project.audio.track == nil {
+                    // The gate is a level, and a level only means something against
+                    // the room it is measured in. Showing it next to the live meter
+                    // is the only honest way to set it.
+                    LabeledSlider(title: "Starts above", value: Binding(
+                        get: { controller.project.audio.musicGateLevel },
+                        set: { controller.project.audio.musicGateLevel = $0 }),
+                        range: 0.05...0.9, format: { String(format: "%.0f%%", $0 * 100) })
+                    meter("Heard now", audio.features.level,
+                          audio.features.level > controller.project.audio.musicGateLevel
+                            ? .green : .secondary)
+                    Text("Set it just above what the empty room reads. The show keeps "
+                         + "running for \(String(format: "%.1f", AudioSettings.musicGateHold))s "
+                         + "after the music drops, so a gap between tracks is not a "
+                         + "stutter.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                } else {
+                    Text("The show holds still whenever the track is paused, and picks "
+                         + "up from the same frame when it starts again.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+
+            Section("Streaming services") {
+                Text("""
+                     Apple Music, SoundCloud, Spotify and YouTube all send audio \
+                     that no other app is allowed to read — the sound is decrypted \
+                     inside their own player and never reaches here. Nothing can \
+                     change that from inside an app, so there is no import for them.
+                     """)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Text("""
+                     Listen mode is the way round it, and it is not a consolation \
+                     prize: play the music from any app, or from the PA in the \
+                     room, and the microphone gives the show its level, its bands \
+                     and its beat. Music library above reaches the songs the device \
+                     holds unencrypted, which is what a file needs to be for \
+                     several phones to play it in step.
+                     """)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Button {
+                    controller.setClockSource(.listen)
+                } label: {
+                    Label("Switch the clock to Listen", systemImage: "ear")
+                }
+                .disabled(controller.project.audio.clockSource == .listen)
+            }
+
             Section("Levels") {
                 meter("Level", audio.features.level, .blue)
                 meter("Bass", audio.features.bass, .purple)
@@ -138,11 +217,42 @@ struct AudioPanel: View {
                 importError = error.localizedDescription
             }
         }
+        .sheet(isPresented: $isPickingFromLibrary) {
+            MusicLibraryPicker(onPick: { item in
+                isPickingFromLibrary = false
+                importFromLibrary(item)
+            }, onCancel: {
+                isPickingFromLibrary = false
+            })
+            .ignoresSafeArea()
+        }
         .alert("Could not load track", isPresented: Binding(
             get: { importError != nil }, set: { if !$0 { importError = nil } })) {
             Button("OK", role: .cancel) { importError = nil }
         } message: {
             Text(importError ?? "")
+        }
+    }
+
+    private func chooseFromLibrary() {
+        Task { @MainActor in
+            guard await MediaImporter.requestMusicLibraryAccess() else {
+                importError = MediaImporter.MusicImportError.notAuthorised.localizedDescription
+                return
+            }
+            isPickingFromLibrary = true
+        }
+    }
+
+    private func importFromLibrary(_ item: MPMediaItem) {
+        Task { @MainActor in
+            do {
+                let ref = try await MediaImporter.importMusicLibraryItem(
+                    item, projectID: controller.project.id)
+                controller.setTrack(ref)
+            } catch {
+                importError = error.localizedDescription
+            }
         }
     }
 

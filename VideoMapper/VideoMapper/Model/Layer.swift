@@ -79,7 +79,12 @@ struct LayerTransform: Codable, Equatable {
     /// Centre in normalized canvas space.
     var center: CGPoint = CGPoint(x: 0.5, y: 0.5)
     /// Size as a fraction of the canvas.
-    var size: CGSize = CGSize(width: 0.6, height: 0.6)
+    ///
+    /// A new layer fills the frame. Mapping is subtractive work — you pull the
+    /// corners in to meet a surface — so starting at full size means the handles
+    /// are already at the edges of the picture rather than somewhere in the middle
+    /// of it, and nothing has to be enlarged before it can be aligned.
+    var size: CGSize = CGSize(width: 1, height: 1)
     /// Clockwise rotation in radians.
     var rotation: Double = 0
     /// Free-form corner pins, added after rotation, in normalized canvas units.
@@ -89,7 +94,7 @@ struct LayerTransform: Codable, Equatable {
     var mesh: MeshWarp = MeshWarp()
 
     init(center: CGPoint = CGPoint(x: 0.5, y: 0.5),
-         size: CGSize = CGSize(width: 0.6, height: 0.6),
+         size: CGSize = CGSize(width: 1, height: 1),
          rotation: Double = 0,
          cornerOffsets: [CGPoint] = Array(repeating: .zero, count: 4),
          mesh: MeshWarp = MeshWarp()) {
@@ -107,7 +112,7 @@ struct LayerTransform: Codable, Equatable {
         center = try container.decodeIfPresent(CGPoint.self, forKey: .center)
             ?? CGPoint(x: 0.5, y: 0.5)
         size = try container.decodeIfPresent(CGSize.self, forKey: .size)
-            ?? CGSize(width: 0.6, height: 0.6)
+            ?? CGSize(width: 1, height: 1)
         rotation = try container.decodeIfPresent(Double.self, forKey: .rotation) ?? 0
         let corners = try container.decodeIfPresent([CGPoint].self, forKey: .cornerOffsets) ?? []
         cornerOffsets = corners.count == 4
@@ -193,8 +198,6 @@ struct LayerTransform: Codable, Equatable {
 
         let points = meshPoints(scale: scale)
         let across = mesh.pointsAcross
-        let cellWidth = 1.0 / Double(mesh.columns)
-        let cellHeight = 1.0 / Double(mesh.rows)
 
         var cells: [MeshCell] = []
         cells.reserveCapacity(mesh.cellCount)
@@ -206,14 +209,57 @@ struct LayerTransform: Codable, Equatable {
                                 p10: points[topLeft + 1],
                                 p11: points[topLeft + across + 1],
                                 p01: points[topLeft + across])
+                // The slice comes from the grid's own line positions, so an uneven
+                // grid still hands each cell exactly its share of the texture.
+                let origin = mesh.parameter(column: column, row: row)
+                let far = mesh.parameter(column: column + 1, row: row + 1)
                 cells.append(MeshCell(
                     quad: quad,
-                    uvOrigin: CGPoint(x: Double(column) * cellWidth,
-                                      y: Double(row) * cellHeight),
-                    uvSize: CGSize(width: cellWidth, height: cellHeight)))
+                    uvOrigin: origin,
+                    uvSize: CGSize(width: far.x - origin.x, height: far.y - origin.y)))
             }
         }
         return cells
+    }
+
+    /// Adds a control point as close to `position` as the grid allows.
+    ///
+    /// A dividing line goes in each way, so the new point lands exactly under the
+    /// finger and its row and column gain points too. Returns false when the tap was
+    /// too close to lines that already exist, or the grid is already at its cap.
+    @discardableResult
+    mutating func insertMeshPoint(near position: CGPoint, scale: Double = 1) -> Bool {
+        guard let parameter = meshParameter(at: position, scale: scale) else { return false }
+        let addedColumn = mesh.insertColumn(at: parameter.x)
+        let addedRow = mesh.insertRow(at: parameter.y)
+        return addedColumn || addedRow
+    }
+
+    /// Removes the dividing lines crossing at a control point, and with them the
+    /// points along those lines. The four corners have no interior lines to remove.
+    @discardableResult
+    mutating func removeMeshPoint(_ index: Int) -> Bool {
+        guard (0..<mesh.pointCount).contains(index) else { return false }
+        let column = index % mesh.pointsAcross
+        let row = index / mesh.pointsAcross
+        // Rows first: removing a column does not move row indices, but doing it the
+        // other way round would.
+        let removedRow = mesh.removeRow(row)
+        let removedColumn = mesh.removeColumn(column)
+        return removedRow || removedColumn
+    }
+
+    /// Where a canvas point sits inside the layer, as a (u, v) in 0...1, or nil when
+    /// it falls outside. Uses the *unwarped* quad, so the answer is a position on the
+    /// surface rather than on the bent grid.
+    func meshParameter(at position: CGPoint, scale: Double = 1) -> CGPoint? {
+        let matrix = Homography.unitSquare(to: quad(scale: scale))
+        guard let inverse = Homography.invert(matrix) else { return nil }
+        let parameter = Homography.apply(inverse, to: position)
+        guard parameter.x.isFinite, parameter.y.isFinite,
+              parameter.x >= 0, parameter.x <= 1,
+              parameter.y >= 0, parameter.y <= 1 else { return nil }
+        return parameter
     }
 
     /// Rewrites the *hand* offset of a control point so it lands on `position`.
@@ -351,10 +397,11 @@ struct MappingLayer: Codable, Equatable, Identifiable {
         let mediaAspect = ref.pixelSize.height > 0
             ? Double(ref.pixelSize.width / ref.pixelSize.height)
             : canvasAspect
-        // Fit the media inside 70% of the canvas without distorting it.
+        // Fill the frame without distorting the media: the wider of the two ratios
+        // reaches the edge and the other is brought in to match it.
         let relative = mediaAspect / canvasAspect
-        var w = 0.7, h = 0.7
-        if relative >= 1 { h = 0.7 / relative } else { w = 0.7 * relative }
+        var w = 1.0, h = 1.0
+        if relative >= 1 { h = 1 / relative } else { w = relative }
         layer.transform.size = CGSize(width: w, height: h)
         return layer
     }

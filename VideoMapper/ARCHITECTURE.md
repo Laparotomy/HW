@@ -73,6 +73,54 @@ The cost is draw calls: one per cell, so 8 x 8 is 64 for that layer. Textures an
 pipeline state are set once per layer and only the uniforms change between cells, but
 the ceiling is deliberate.
 
+### The grid stores lines, not counts
+
+The grid keeps the normalized positions of its dividing lines rather than a number of
+divisions. That is what lets the spacing be uneven — points crowded where a surface
+bends and left sparse where it is flat — and it is what makes a tap able to put a
+point exactly under a finger: `insertColumn(at:)` and `insertRow(at:)` each take a
+position, and `LayerTransform.insertMeshPoint(near:)` turns a canvas point into a
+(u, v) through the inverse homography and inserts one of each.
+
+A new point therefore arrives with the rest of its row and column. That is the price
+of every cell being a quad: a quad carries a full projective map, so perspective stays
+correct inside it. Points placed freely would need the surface triangulated, and a
+triangle carries only an affine map — the content's straight lines would kink at every
+shared edge, which is exactly the artefact the homography was chosen to avoid.
+
+New points are not born flat. Their offsets are a bilinear sample of the field they
+are inserted into, in the grid's own uneven spacing, so the surface does not jump
+where the point appears; the existing points keep their offsets untouched. Both offset
+fields are carried, hand and scan alike, or changing the density would silently throw
+away whichever one it forgot.
+
+Persistence writes both shapes: the line positions this version reads, and the counts
+an older build reads. An older build opening a newer show gets an evenly spaced grid —
+wrong in the spacing, but a show rather than a decoding failure. Decoding sanitises
+what it reads (sorted, clamped, de-duplicated, capped, edges always present), because
+a hand-edited file must not be able to hand the renderer an index it can run off the
+end of.
+
+### Snapping is a seam fix, not a convenience
+
+Two mapped surfaces that meet on the wall have to meet exactly. A gap of one pixel is
+a black hairline and an overlap of one pixel is a bright one; neither is fixable by eye
+from where you stand next to a projector, and both are obvious to an audience sitting
+in front of it. So a dragged point is pulled onto the nearest candidate within a
+fingertip's radius — a point of another visible layer, another point of the same
+layer, or an edge or centre line of the canvas — and it lands on that coordinate
+exactly rather than near it.
+
+The radius is measured in aspect-corrected units. Normalized coordinates are stretched
+by the frame's shape, so without the correction a snap on a 16:9 canvas would reach
+nearly twice as far sideways as vertically — lopsided in exactly the way a projector
+makes obvious. Nearest wins rather than first: with several surfaces meeting at a
+corner, the one under the finger is the one meant.
+
+Snapping does not bypass the fold check. A snapped landing goes through
+`meshIsDrawable(movingPointAt:to:)` like any other drag and is refused if it would
+turn a cell inside out.
+
 The correction is stored as *two* fields, not one. Hand-dragged offsets and
 scan-derived offsets answer to different owners: the first is what the operator
 dragged and must never be recomputed, the second is derived and has to be replaced
@@ -139,6 +187,43 @@ Depth needs a LiDAR scanner, which means a Pro iPhone. `SurfaceScanner.Capabilit
 reports what the hardware can actually do and the UI says it plainly, because an app
 that quietly produced a flat warp on a phone that cannot measure would look broken
 rather than limited.
+
+## Holding the show for the music
+
+"Animate only while music plays" freezes the show clock instead of stopping the
+transport. The distinction matters: the clock is what every generator, every video
+slave and every follower device reads, so holding it holds all of them in step, and
+resuming continues from the same frame rather than jumping forward by the length of
+the silence. The anchor is rewritten on every held frame, which is what makes that
+true.
+
+What counts as "playing" depends on where the audio comes from. A loaded track
+answers from the transport and is exact. Everything else has to answer from the
+microphone, where the real question is "is this room louder than its own floor" — and
+that floor is a property of the room, not of the app, so the threshold is a slider
+shown next to the live meter rather than a constant. A hold of `musicGateHold` keeps
+the show moving through the break between two phrases or the half-second a DJ spends
+cutting the bass; without it, the visuals would freeze and restart, which reads as a
+glitch rather than as following the music.
+
+Free-run is exempt outright. It has no music to wait for and its analyser is not even
+running, so gating there could only ever freeze the show for good.
+
+## Streaming audio cannot be analysed, and Listen mode is the answer
+
+Apple Music catalogue audio is encrypted; only Apple's own player can decrypt it, and
+`MPMediaItem.assetURL` is nil for it. SoundCloud has no third-party iOS playback SDK,
+and Spotify's and YouTube's decode inside their own players. There is no API on iOS
+that hands another app those samples, so there is no import for them and no amount of
+app-side work would produce one.
+
+What there is, is the microphone. Listen mode analyses whatever is audible — from
+another app on the same phone, from a laptop, from the PA — and produces the same
+level, bands, beat and tempo a loaded file would. `MPMediaPickerController` covers the
+other half: the songs the device holds unencrypted, exported to m4a into the show's own
+folder. The export is not a nicety. `AVAudioFile` cannot open an `ipod-library://` URL,
+and a show that has to play in step on several phones needs the audio to be a file each
+of them holds.
 
 ## Tempo is detected, and its confidence is the interesting part
 
@@ -332,6 +417,13 @@ layer — the mapping stays visible so the operator can see what is absent.
 - The correction grid is a quad mesh with linear interpolation inside each cell. A
   tight curve needs more cells rather than smoother interpolation; there is no spline
   surface.
+- Correction points are not free-floating: adding one adds its whole row and column.
+  Free placement would require triangulation, which would trade perspective-correct
+  cells for affine ones.
+- Snapping only pulls control points. Dragging a whole layer by its middle has no one
+  point to line up, so it is left alone.
+- Apple Music, SoundCloud, Spotify and YouTube audio cannot be read by any app; only
+  the microphone reaches it.
 - Tempo detection is onset-based and reports low confidence rather than trying harder
   on music it cannot read.
 - A scan is a single capture from one position, not a walk-around reconstruction. It

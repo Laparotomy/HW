@@ -289,8 +289,30 @@ struct InspectorPanel: View {
             }
 
             Text(mesh.isSubdivided
-                 ? "\(mesh.pointCount) points. Switch the stage to Warp and drag any of them."
-                 : "Four corners only. Raise a number above to add points in between.")
+                 ? "\(mesh.pointCount) points, \(mesh.columns) x \(mesh.rows) cells."
+                 : "Four corners only — enough for any flat surface at any angle.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
+            Text("""
+                 The pickers lay out an even grid. For points exactly where a \
+                 surface needs them, switch the stage to Warp and double-tap it: \
+                 a point goes in under your finger, and double-tapping one takes \
+                 it away again. Each new point brings its row and column with it, \
+                 which is what keeps straight lines in the content straight across \
+                 every cell.
+                 """)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
+            Toggle("Snap to nearby points", isOn: $controller.snapsPoints)
+            Text("""
+                 A dragged point lands exactly on a point of another layer, on \
+                 one of this layer's own, or on an edge or centre line of the \
+                 frame. Two surfaces a pixel apart leave a black seam on the wall \
+                 and two that overlap leave a bright one; landing on the same \
+                 coordinate is what removes it.
+                 """)
                 .font(.caption)
                 .foregroundStyle(.secondary)
 

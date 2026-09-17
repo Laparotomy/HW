@@ -43,6 +43,12 @@ struct AudioSettings: Codable, Equatable {
     /// Below this, a detected tempo is treated as a guess and the manual value is
     /// used instead. See `BeatTracker.tempoConfidence`.
     static let confidenceThreshold: Double = 0.45
+    /// How long the show keeps moving after the music drops below the gate.
+    ///
+    /// Without a hold, the break between two phrases — or the half-second a DJ
+    /// spends cutting the bass — would freeze the visuals and start them again,
+    /// which reads as a glitch rather than as the show following the music.
+    static let musicGateHold: Double = 0.8
 
     var track: MediaReference?
     var clockSource: ClockSource = .freeRun
@@ -55,6 +61,15 @@ struct AudioSettings: Codable, Equatable {
     /// Positive values delay the visuals, to compensate for speaker distance
     /// or a projector's input lag.
     var latencyOffset: Double = 0
+    /// Hold the show still while nothing is playing, and let it run again when the
+    /// music comes back. Only meaningful once there is music to follow, so it does
+    /// nothing in free-run.
+    var animateOnlyWithMusic: Bool = false
+    /// Level, 0...1, above which the microphone counts as hearing music.
+    ///
+    /// Adjustable rather than fixed because the floor depends entirely on the room:
+    /// a bar with a ventilation rumble sits far higher than a gallery.
+    var musicGateLevel: Double = 0.35
 
     init() {}
 
@@ -69,10 +84,14 @@ struct AudioSettings: Codable, Equatable {
         tempoMode = try container.decodeIfPresent(TempoMode.self, forKey: .tempoMode) ?? .automatic
         manualBPM = try container.decodeIfPresent(Double.self, forKey: .manualBPM) ?? 120
         latencyOffset = try container.decodeIfPresent(Double.self, forKey: .latencyOffset) ?? 0
+        animateOnlyWithMusic = try container.decodeIfPresent(Bool.self,
+                                                             forKey: .animateOnlyWithMusic) ?? false
+        musicGateLevel = try container.decodeIfPresent(Double.self, forKey: .musicGateLevel) ?? 0.35
     }
 
     private enum CodingKeys: String, CodingKey {
         case track, clockSource, volume, loops, tempoMode, manualBPM, latencyOffset
+        case animateOnlyWithMusic, musicGateLevel
     }
 }
 

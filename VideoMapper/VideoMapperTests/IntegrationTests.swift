@@ -204,6 +204,18 @@ final class ScanApplicationIntegrationTests: XCTestCase {
         SurfaceScan(name: "Wall", imageFilename: "wall.jpg", camera: camera, depth: depth)
     }
 
+    /// A layer occupying part of the frame rather than all of it.
+    ///
+    /// These tests are about what the solver does with a surface, so the mapping they
+    /// start from is fixed here rather than inherited from whatever a new layer
+    /// happens to default to — otherwise changing that default silently changes what
+    /// every bend in this file is measured against.
+    private func surfaceLayer(named name: String) -> MappingLayer {
+        var layer = MappingLayer(name: name)
+        layer.transform.size = CGSize(width: 0.6, height: 0.6)
+        return layer
+    }
+
     /// Mirrors what `ShowController.applyScan` does, in the model terms the
     /// controller now delegates to.
     private func apply(_ scan: SurfaceScan, to layer: inout MappingLayer,
@@ -228,7 +240,7 @@ final class ScanApplicationIntegrationTests: XCTestCase {
     /// A four-corner layer has nowhere to put curvature, so bending it has to raise
     /// the grid first — silently doing nothing would look exactly like a failed scan.
     func testBendingAPlainQuadGivesItAGridToBendWith() {
-        var layer = MappingLayer(name: "Column")
+        var layer = surfaceLayer(named: "Column")
         XCTAssertFalse(layer.transform.mesh.isSubdivided)
 
         XCTAssertNil(apply(scan(bulgingWall(base: 3, bulge: 0.5)), to: &layer))
@@ -239,7 +251,7 @@ final class ScanApplicationIntegrationTests: XCTestCase {
     /// The property the whole feature rests on, checked here through the same path
     /// the app uses rather than against the solver directly.
     func testBendingToAFlatWallLeavesAFinishedMappingAlone() {
-        var layer = MappingLayer(name: "Wall")
+        var layer = surfaceLayer(named: "Wall")
         layer.transform.setCorner(1, to: CGPoint(x: 0.85, y: 0.22))
         let quadBefore = layer.transform.quad()
 
@@ -254,7 +266,7 @@ final class ScanApplicationIntegrationTests: XCTestCase {
 
     /// Hand alignment is never touched by a bend: it lives in its own array.
     func testBendingLeavesHandAlignmentExactlyWhereItWas() {
-        var layer = MappingLayer(name: "Column")
+        var layer = surfaceLayer(named: "Column")
         layer.transform.setMeshDivisions(columns: 4, rows: 4)
         let index = layer.transform.mesh.index(column: 2, row: 2)
         layer.transform.setMeshPoint(index, to: CGPoint(x: 0.56, y: 0.44))
@@ -272,7 +284,7 @@ final class ScanApplicationIntegrationTests: XCTestCase {
     /// found that, and the one that keeps it fixed.
     func testBendingTwiceGivesExactlyWhatBendingOnceGives() {
         let surface = scan(bulgingWall(base: 3, bulge: 0.5))
-        var once = MappingLayer(name: "Column")
+        var once = surfaceLayer(named: "Column")
         XCTAssertNil(apply(surface, to: &once))
 
         var twice = once
@@ -285,7 +297,7 @@ final class ScanApplicationIntegrationTests: XCTestCase {
 
     /// Bending is reversible without losing the hand work underneath it.
     func testRemovingABendLeavesTheHandAlignmentBehind() {
-        var layer = MappingLayer(name: "Column")
+        var layer = surfaceLayer(named: "Column")
         layer.transform.setMeshDivisions(columns: 4, rows: 4)
         let index = layer.transform.mesh.index(column: 1, row: 2)
         layer.transform.setMeshPoint(index, to: CGPoint(x: 0.4, y: 0.52))
@@ -300,7 +312,7 @@ final class ScanApplicationIntegrationTests: XCTestCase {
     }
 
     func testAPhotoOnlyScanReportsWhyItCannotBend() {
-        var layer = MappingLayer(name: "Column")
+        var layer = surfaceLayer(named: "Column")
         let photoOnly = SurfaceScan(name: "Wall", imageFilename: "wall.jpg",
                                     camera: camera, depth: nil)
         XCTAssertEqual(apply(photoOnly, to: &layer), .noDepth)
@@ -308,7 +320,7 @@ final class ScanApplicationIntegrationTests: XCTestCase {
     }
 
     func testABendAlwaysLeavesTheGridDrawable() throws {
-        var layer = MappingLayer(name: "Column")
+        var layer = surfaceLayer(named: "Column")
         XCTAssertNil(apply(scan(bulgingWall(base: 2.5, bulge: 0.7)), to: &layer))
 
         // Every cell must stay convex, or its homography is degenerate and the patch
@@ -319,7 +331,7 @@ final class ScanApplicationIntegrationTests: XCTestCase {
     }
 
     func testABentLayerSurvivesBeingSavedAndReopened() throws {
-        var layer = MappingLayer(name: "Column")
+        var layer = surfaceLayer(named: "Column")
         XCTAssertNil(apply(scan(bulgingWall(base: 3, bulge: 0.5)), to: &layer))
 
         var project = MappingProject(name: "Bent")
@@ -361,12 +373,12 @@ final class CanvasIntegrationTests: XCTestCase {
         let landscape = MappingLayer.make(from: ref, canvasAspect: 16.0 / 9.0)
         let portrait = MappingLayer.make(from: ref, canvasAspect: 9.0 / 16.0)
 
-        // Matching the canvas exactly means filling the chosen fraction of both axes.
-        XCTAssertEqual(landscape.transform.size.width, 0.7, accuracy: 1e-9)
-        XCTAssertEqual(landscape.transform.size.height, 0.7, accuracy: 1e-9)
+        // Matching the canvas exactly means filling both axes.
+        XCTAssertEqual(landscape.transform.size.width, 1, accuracy: 1e-9)
+        XCTAssertEqual(landscape.transform.size.height, 1, accuracy: 1e-9)
         // In portrait the same clip has to shrink vertically to keep its shape.
-        XCTAssertEqual(portrait.transform.size.width, 0.7, accuracy: 1e-9)
-        XCTAssertLessThan(portrait.transform.size.height, 0.7)
+        XCTAssertEqual(portrait.transform.size.width, 1, accuracy: 1e-9)
+        XCTAssertLessThan(portrait.transform.size.height, 1)
     }
 
     func testAZeroSidedCanvasFallsBackRatherThanDividingByZero() {

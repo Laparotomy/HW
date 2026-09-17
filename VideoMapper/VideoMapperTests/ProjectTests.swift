@@ -54,15 +54,15 @@ final class ProjectCodingTests: XCTestCase {
         let landscape = MediaReference(kind: .video, filename: "l.mov", displayName: "L",
                                        pixelSize: CGSize(width: 1920, height: 1080), duration: 1)
         let layer = MappingLayer.make(from: landscape, canvasAspect: 16.0 / 9.0)
-        XCTAssertEqual(layer.transform.size.width, 0.7, accuracy: 1e-6)
-        XCTAssertEqual(layer.transform.size.height, 0.7, accuracy: 1e-6)
+        XCTAssertEqual(layer.transform.size.width, 1, accuracy: 1e-6)
+        XCTAssertEqual(layer.transform.size.height, 1, accuracy: 1e-6)
 
         let portrait = MediaReference(kind: .video, filename: "p.mov", displayName: "P",
                                       pixelSize: CGSize(width: 1080, height: 1920), duration: 1)
         let tall = MappingLayer.make(from: portrait, canvasAspect: 16.0 / 9.0)
         XCTAssertLessThan(tall.transform.size.width, tall.transform.size.height)
-        // 9:16 media inside a 16:9 canvas occupies 0.7 * (9/16) / (16/9) of the width.
-        XCTAssertEqual(tall.transform.size.width, 0.7 * (9.0 / 16.0) / (16.0 / 9.0), accuracy: 1e-6)
+        // 9:16 media inside a 16:9 canvas occupies (9/16) / (16/9) of the width.
+        XCTAssertEqual(tall.transform.size.width, (9.0 / 16.0) / (16.0 / 9.0), accuracy: 1e-6)
     }
 }
 

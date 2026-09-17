@@ -10,6 +10,9 @@ struct ContentView: View {
     @State private var isPerforming = false
     @State private var showsBrowser = false
     @State private var stageSettings = false
+    /// The stage taken full-screen while still editable, so a mapping can be dialled
+    /// in at the size it will actually be seen rather than in a 260-point strip.
+    @State private var isStageExpanded = false
 
     enum Panel: String, CaseIterable, Identifiable {
         case layers, look, audio, sync
@@ -37,13 +40,15 @@ struct ContentView: View {
             Group {
                 if isPerforming {
                     performView
+                } else if isStageExpanded {
+                    expandedStage
                 } else {
                     editView
                 }
             }
             .navigationTitle(controller.project.name)
             .navigationBarTitleDisplayMode(.inline)
-            .toolbar(isPerforming ? .hidden : .visible, for: .navigationBar)
+            .toolbar(isChromeHidden ? .hidden : .visible, for: .navigationBar)
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
                     Button {
@@ -54,12 +59,31 @@ struct ContentView: View {
                     .accessibilityLabel("Shows")
                 }
                 ToolbarItem(placement: .topBarTrailing) {
-                    Button {
-                        stageSettings = true
+                    // The frame's shape changes often enough — a different projector,
+                    // a screen turned on its side — that burying it one sheet deep
+                    // was a tap too many.
+                    Menu {
+                        Picker("Frame", selection: Binding(
+                            get: { CanvasPreset.matching(controller.project.canvasSize) },
+                            set: { preset in
+                                // "Custom" has no size of its own; it is where the
+                                // numbers are typed, so it opens the sheet.
+                                if let size = preset.size {
+                                    controller.setCanvasSize(size)
+                                } else {
+                                    stageSettings = true
+                                }
+                            })) {
+                            ForEach(CanvasPreset.allCases) { preset in
+                                Text(preset.displayName).tag(preset)
+                            }
+                        }
+                        Divider()
+                        Button("Stage settings…") { stageSettings = true }
                     } label: {
                         Image(systemName: "aspectratio")
                     }
-                    .accessibilityLabel("Stage settings")
+                    .accessibilityLabel("Frame format")
                 }
                 ToolbarItem(placement: .topBarTrailing) {
                     Button {
@@ -77,8 +101,11 @@ struct ContentView: View {
         .sheet(isPresented: $stageSettings) {
             StageSettingsView(controller: controller)
         }
-        .statusBarHidden(isPerforming)
+        .statusBarHidden(isChromeHidden)
     }
+
+    /// True whenever the stage has the screen to itself.
+    private var isChromeHidden: Bool { isPerforming || isStageExpanded }
 
     // MARK: - Editing
 
@@ -87,6 +114,19 @@ struct ContentView: View {
             StageView(controller: controller)
                 .frame(maxWidth: .infinity)
                 .frame(height: 260)
+                .overlay(alignment: .topTrailing) {
+                    Button {
+                        withAnimation { isStageExpanded = true }
+                    } label: {
+                        Image(systemName: "arrow.up.left.and.arrow.down.right")
+                            .font(.footnote.weight(.semibold))
+                            .padding(7)
+                            .background(Circle().fill(.black.opacity(0.45)))
+                    }
+                    .foregroundStyle(.white.opacity(0.85))
+                    .padding(8)
+                    .accessibilityLabel("Expand stage")
+                }
 
             transportBar
                 .padding(.horizontal)
@@ -154,6 +194,52 @@ struct ContentView: View {
         }
     }
 
+    // MARK: - Expanded stage
+
+    /// Editing, with the stage taking the whole screen.
+    ///
+    /// Every gesture the small stage answers to still works here — this is the same
+    /// view, given more room — so corners can be dragged and points added at a size
+    /// where a few pixels of misalignment are actually visible.
+    private var expandedStage: some View {
+        ZStack(alignment: .top) {
+            Color.black.ignoresSafeArea()
+            StageView(controller: controller)
+                .ignoresSafeArea()
+
+            HStack(spacing: 12) {
+                Button {
+                    withAnimation { isStageExpanded = false }
+                } label: {
+                    Image(systemName: "arrow.down.right.and.arrow.up.left")
+                }
+                .accessibilityLabel("Collapse stage")
+
+                Picker("Stage mode", selection: $controller.stageMode) {
+                    ForEach(ShowController.StageMode.allCases) { Text($0.displayName).tag($0) }
+                }
+                .pickerStyle(.segmented)
+                .frame(width: 140)
+
+                Spacer()
+
+                if controller.sync.role != .follower {
+                    Button {
+                        controller.togglePlayback()
+                    } label: {
+                        Image(systemName: controller.isPlaying ? "pause.fill" : "play.fill")
+                    }
+                    .accessibilityLabel(controller.isPlaying ? "Pause" : "Play")
+                }
+            }
+            .font(.title3)
+            .foregroundStyle(.white.opacity(0.85))
+            .padding(.horizontal)
+            .padding(.top, 8)
+        }
+        .persistentSystemOverlays(.hidden)
+    }
+
     // MARK: - Performing
 
     private var performView: some View {
@@ -171,6 +257,14 @@ struct ContentView: View {
                         .symbolRenderingMode(.hierarchical)
                 }
                 .accessibilityLabel("Exit perform mode")
+
+                // Mid-show a mapping sometimes needs a nudge. Warp mode reaches the
+                // handles without leaving the full-screen output.
+                Picker("Stage mode", selection: $controller.stageMode) {
+                    ForEach(ShowController.StageMode.allCases) { Text($0.displayName).tag($0) }
+                }
+                .pickerStyle(.segmented)
+                .frame(width: 130)
 
                 if controller.sync.role != .follower {
                     Button {
@@ -200,10 +294,20 @@ struct TimecodeView: View {
 
     var body: some View {
         TimelineView(.periodic(from: .now, by: 0.05)) { _ in
-            Text(timecode(controller.showTime))
-                .font(.system(.body, design: .monospaced))
-                .foregroundStyle(.secondary)
-                .accessibilityLabel("Show time")
+            HStack(spacing: 5) {
+                Text(timecode(controller.showTime))
+                    .font(.system(.body, design: .monospaced))
+                    .foregroundStyle(.secondary)
+                    .accessibilityLabel("Show time")
+                // A frozen clock with no explanation looks like a crash. This says
+                // the show is deliberately holding until it hears something.
+                if controller.isWaitingForMusic {
+                    Image(systemName: "ear")
+                        .font(.caption)
+                        .foregroundStyle(.orange)
+                        .accessibilityLabel("Waiting for music")
+                }
+            }
         }
     }
 

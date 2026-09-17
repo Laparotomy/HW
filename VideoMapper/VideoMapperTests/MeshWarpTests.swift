@@ -397,3 +397,298 @@ final class MeshWarpPersistenceTests: XCTestCase {
         XCTAssertEqual(mesh.offsets.count, mesh.pointCount)
     }
 }
+
+/// Adding a point one at a time, where the surface needs it.
+///
+/// The grid is stored as the positions of its dividing lines rather than as a count,
+/// which is what lets the spacing be uneven: points crowded where a wall bends and
+/// left sparse where it is flat. A tap inserts a line each way, so the new point
+/// lands under the finger and brings its row and column with it.
+final class MeshPointInsertionTests: XCTestCase {
+
+    // MARK: - Lines
+
+    func testInsertingAColumnAddsOnePointPerRow() {
+        var mesh = MeshWarp()
+        XCTAssertTrue(mesh.insertColumn(at: 0.3))
+        XCTAssertEqual(mesh.columns, 2)
+        XCTAssertEqual(mesh.rows, 1)
+        XCTAssertEqual(mesh.pointCount, 6)
+        XCTAssertEqual(mesh.columnPositions, [0, 0.3, 1])
+        XCTAssertFalse(mesh.isEvenlySpaced)
+    }
+
+    func testInsertingARowAddsOnePointPerColumn() {
+        var mesh = MeshWarp(columns: 3, rows: 1)
+        XCTAssertTrue(mesh.insertRow(at: 0.8))
+        XCTAssertEqual(mesh.rows, 2)
+        XCTAssertEqual(mesh.pointCount, 12)
+        XCTAssertEqual(mesh.rowPositions, [0, 0.8, 1])
+    }
+
+    /// Lines closer together than a fingertip cannot be told apart on the stage, and
+    /// a cell that thin has nothing useful to warp.
+    func testALineTooCloseToAnotherIsRefused() {
+        var mesh = MeshWarp()
+        XCTAssertTrue(mesh.insertColumn(at: 0.5))
+        XCTAssertFalse(mesh.canInsertColumn(at: 0.52))
+        XCTAssertFalse(mesh.insertColumn(at: 0.52))
+        XCTAssertEqual(mesh.columns, 2)
+        XCTAssertTrue(mesh.insertColumn(at: 0.6))
+    }
+
+    func testALineOnTopOfTheLayersOwnEdgeIsRefused() {
+        var mesh = MeshWarp()
+        XCTAssertFalse(mesh.insertColumn(at: 0.01))
+        XCTAssertFalse(mesh.insertColumn(at: 0.999))
+        XCTAssertFalse(mesh.insertRow(at: 0))
+        XCTAssertEqual(mesh.pointCount, 4)
+    }
+
+    func testANonFiniteInsertionIsRefused() {
+        var mesh = MeshWarp()
+        XCTAssertFalse(mesh.insertColumn(at: .nan))
+        XCTAssertFalse(mesh.insertRow(at: .infinity))
+        XCTAssertEqual(mesh.pointCount, 4)
+    }
+
+    /// Every cell is its own draw call, so the grid has to stop somewhere.
+    func testTheGridStopsAtItsCap() {
+        var mesh = MeshWarp()
+        // Evenly spread insertions, all far enough apart to be accepted until the
+        // cap itself refuses them.
+        for step in 1...20 {
+            mesh.insertColumn(at: Double(step) / 21)
+        }
+        XCTAssertEqual(mesh.columns, MeshWarp.maximumDivisions)
+        XCTAssertFalse(mesh.insertColumn(at: 0.5001))
+    }
+
+    // MARK: - What happens to the correction
+
+    /// A point added to a mapping that has already been dialled in must not disturb
+    /// the correction around it.
+    func testInsertingKeepsTheNeighbouringOffsetsExactly() {
+        var mesh = MeshWarp(columns: 2, rows: 2)
+        mesh.setOffset(CGPoint(x: 0.05, y: -0.03), column: 1, row: 1)
+
+        XCTAssertTrue(mesh.insertColumn(at: 0.9))
+        // The old centre is still the second column, now of four points across.
+        XCTAssertEqual(mesh.offset(column: 1, row: 1), CGPoint(x: 0.05, y: -0.03))
+        XCTAssertEqual(mesh.columnPositions, [0, 0.5, 0.9, 1])
+    }
+
+    /// The new point inherits the shape it is being inserted into, so the surface
+    /// does not jump where the point appears.
+    func testANewPointStartsOnTheSurfaceItSplits() {
+        var mesh = MeshWarp(columns: 2, rows: 1)
+        mesh.setOffset(CGPoint(x: 0.1, y: 0), column: 1, row: 0)
+        mesh.setOffset(CGPoint(x: 0.1, y: 0), column: 1, row: 1)
+
+        XCTAssertTrue(mesh.insertColumn(at: 0.25))
+        // Half way between an offset of zero and one of 0.1.
+        XCTAssertEqual(mesh.offset(column: 1, row: 0).x, 0.05, accuracy: 1e-12)
+    }
+
+    func testInsertingCarriesTheScanFieldToo() {
+        var mesh = MeshWarp(columns: 2, rows: 2)
+        var scan = [CGPoint](repeating: .zero, count: mesh.pointCount)
+        scan[mesh.index(column: 1, row: 1)] = CGPoint(x: 0, y: 0.04)
+        mesh.setScanOffsets(scan)
+
+        XCTAssertTrue(mesh.insertRow(at: 0.9))
+        XCTAssertEqual(mesh.scanOffsets.count, mesh.pointCount)
+        XCTAssertEqual(mesh.scanOffset(at: mesh.index(column: 1, row: 1)),
+                       CGPoint(x: 0, y: 0.04))
+    }
+
+    // MARK: - Removing
+
+    func testRemovingAnInteriorLineTakesItsPointsWithIt() {
+        var mesh = MeshWarp(columns: 3, rows: 2)
+        XCTAssertTrue(mesh.removeColumn(1))
+        XCTAssertEqual(mesh.columns, 2)
+        XCTAssertEqual(mesh.offsets.count, mesh.pointCount)
+        XCTAssertEqual(mesh.scanOffsets.count, mesh.pointCount)
+    }
+
+    /// The outer lines are the layer's own sides. Removing one would not remove a
+    /// correction point, it would delete an edge of the surface.
+    func testTheEdgesCannotBeRemoved() {
+        var mesh = MeshWarp(columns: 2, rows: 2)
+        XCTAssertFalse(mesh.removeColumn(0))
+        XCTAssertFalse(mesh.removeColumn(2))
+        XCTAssertFalse(mesh.removeRow(0))
+        XCTAssertFalse(mesh.removeRow(2))
+        XCTAssertEqual(mesh.pointCount, 9)
+    }
+
+    func testRemovingKeepsTheSurvivingOffsets() {
+        var mesh = MeshWarp(columns: 3, rows: 1)
+        mesh.setOffset(CGPoint(x: 0.2, y: 0), column: 2, row: 0)
+        XCTAssertTrue(mesh.removeColumn(1))
+        // The point that was third across is now second, and still carries its offset.
+        XCTAssertEqual(mesh.offset(column: 1, row: 0), CGPoint(x: 0.2, y: 0))
+    }
+
+    // MARK: - Through the layer
+
+    func testATapPutsAPointUnderTheFinger() {
+        var transform = LayerTransform()
+        let target = CGPoint(x: 0.3, y: 0.7)
+        XCTAssertTrue(transform.insertMeshPoint(near: target))
+
+        let index = transform.mesh.index(column: 1, row: 1)
+        let landed = transform.meshPoints()[index]
+        XCTAssertEqual(landed.x, target.x, accuracy: 1e-5)
+        XCTAssertEqual(landed.y, target.y, accuracy: 1e-5)
+    }
+
+    func testATapOutsideTheLayerAddsNothing() {
+        var transform = LayerTransform()
+        transform.size = CGSize(width: 0.4, height: 0.4)
+        XCTAssertFalse(transform.insertMeshPoint(near: CGPoint(x: 0.95, y: 0.95)))
+        XCTAssertEqual(transform.mesh.pointCount, 4)
+    }
+
+    /// The invariant the whole mesh design rests on, now for a point added by hand
+    /// rather than by the density pickers.
+    func testAddingAPointToAKeystonedMappingDoesNotMoveIt() {
+        var transform = LayerTransform()
+        transform.setCorner(1, to: CGPoint(x: 0.92, y: 0.18))
+        transform.setCorner(2, to: CGPoint(x: 0.88, y: 0.83))
+        let before = transform.quad()
+        let cornersBefore = transform.meshPoints()
+
+        // The quad's own projective centre, so the inserted lines land at (0.5, 0.5)
+        // in the layer's parameters and both of them are certain to be accepted.
+        let centre = Homography.apply(Homography.unitSquare(to: transform.quad()),
+                                      to: CGPoint(x: 0.5, y: 0.5))
+        XCTAssertTrue(transform.insertMeshPoint(near: centre))
+
+        XCTAssertEqual(transform.quad(), before)
+        let cells = transform.meshCells()
+        XCTAssertEqual(cells.count, 4)
+        XCTAssertEqual(cells.first!.quad[0].x, cornersBefore.first!.x, accuracy: 1e-5)
+        XCTAssertEqual(cells.last!.quad[2].y, cornersBefore.last!.y, accuracy: 1e-5)
+    }
+
+    /// An uneven grid has to hand each cell exactly its own share of the texture, or
+    /// the image is stretched on one side of the new line and squeezed on the other.
+    func testAnUnevenGridSlicesTheTextureByItsOwnLines() {
+        var transform = LayerTransform()
+        XCTAssertTrue(transform.insertMeshPoint(near: CGPoint(x: 0.3, y: 0.7)))
+        let cells = transform.meshCells()
+
+        XCTAssertEqual(cells.count, 4)
+        XCTAssertEqual(cells[0].uvOrigin, .zero)
+        // The tap's position reaches the grid through a `simd_float3x3`, so the line
+        // lands at single-precision accuracy rather than exactly on 0.3.
+        XCTAssertEqual(cells[0].uvSize.width, 0.3, accuracy: 1e-5)
+        XCTAssertEqual(cells[0].uvSize.height, 0.7, accuracy: 1e-5)
+        XCTAssertEqual(cells[1].uvOrigin.x, 0.3, accuracy: 1e-5)
+        XCTAssertEqual(cells[1].uvSize.width, 0.7, accuracy: 1e-5)
+
+        let area = cells.reduce(0.0) { $0 + $1.uvSize.width * $1.uvSize.height }
+        XCTAssertEqual(area, 1, accuracy: 1e-9)
+    }
+
+    func testRemovingAPointTakesItsRowAndColumn() {
+        var transform = LayerTransform()
+        XCTAssertTrue(transform.insertMeshPoint(near: CGPoint(x: 0.3, y: 0.7)))
+        let index = transform.mesh.index(column: 1, row: 1)
+        XCTAssertTrue(transform.removeMeshPoint(index))
+        XCTAssertFalse(transform.mesh.isSubdivided)
+        XCTAssertEqual(transform.mesh.pointCount, 4)
+    }
+
+    func testRemovingACornerIsRefused() {
+        var transform = LayerTransform()
+        XCTAssertTrue(transform.insertMeshPoint(near: CGPoint(x: 0.5, y: 0.5)))
+        XCTAssertFalse(transform.removeMeshPoint(0))
+        XCTAssertFalse(transform.removeMeshPoint(transform.mesh.pointCount - 1))
+        XCTAssertTrue(transform.mesh.isSubdivided)
+    }
+
+    func testAnOutOfRangeRemovalIsSafe() {
+        var transform = LayerTransform()
+        XCTAssertFalse(transform.removeMeshPoint(99))
+        XCTAssertFalse(transform.removeMeshPoint(-1))
+    }
+
+    // MARK: - Where a canvas point sits inside a layer
+
+    func testMeshParameterIsTheInverseOfTheQuadsOwnMap() {
+        var transform = LayerTransform()
+        transform.setCorner(1, to: CGPoint(x: 0.9, y: 0.2))
+        let parameter = CGPoint(x: 0.37, y: 0.62)
+        let canvasPoint = Homography.apply(Homography.unitSquare(to: transform.quad()),
+                                           to: parameter)
+
+        let recovered = transform.meshParameter(at: canvasPoint)
+        XCTAssertEqual(recovered?.x ?? -1, parameter.x, accuracy: 1e-5)
+        XCTAssertEqual(recovered?.y ?? -1, parameter.y, accuracy: 1e-5)
+    }
+
+    func testAPointOutsideTheLayerHasNoParameter() {
+        var transform = LayerTransform()
+        transform.size = CGSize(width: 0.3, height: 0.3)
+        XCTAssertNil(transform.meshParameter(at: CGPoint(x: 0.02, y: 0.02)))
+    }
+
+    // MARK: - Persistence
+
+    func testAnUnevenGridRoundTrips() throws {
+        var mesh = MeshWarp()
+        XCTAssertTrue(mesh.insertColumn(at: 0.2))
+        XCTAssertTrue(mesh.insertRow(at: 0.85))
+        mesh.setOffset(CGPoint(x: 0.01, y: 0.02), column: 1, row: 1)
+
+        let decoded = try JSONDecoder().decode(MeshWarp.self,
+                                               from: JSONEncoder().encode(mesh))
+        XCTAssertEqual(decoded, mesh)
+        XCTAssertEqual(decoded.columnPositions, [0, 0.2, 1])
+        XCTAssertEqual(decoded.rowPositions, [0, 0.85, 1])
+    }
+
+    /// The counts are written alongside the line positions so a build that predates
+    /// uneven grids still opens the show — with even spacing, which is wrong in the
+    /// spacing but is a show rather than a decoding failure.
+    func testTheLegacyCountsAreWrittenToo() throws {
+        var mesh = MeshWarp()
+        XCTAssertTrue(mesh.insertColumn(at: 0.2))
+        XCTAssertTrue(mesh.insertRow(at: 0.85))
+
+        let object = try XCTUnwrap(try JSONSerialization.jsonObject(
+            with: JSONEncoder().encode(mesh)) as? [String: Any])
+        XCTAssertEqual(object["columns"] as? Int, 2)
+        XCTAssertEqual(object["rows"] as? Int, 2)
+        XCTAssertNotNil(object["columnPositions"])
+    }
+
+    func testAGridSavedAsCountsOnlyComesBackEven() throws {
+        let json = """
+        {"columns": 2, "rows": 3, "offsets": []}
+        """
+        let mesh = try JSONDecoder().decode(MeshWarp.self, from: Data(json.utf8))
+        XCTAssertEqual(mesh.columns, 2)
+        XCTAssertEqual(mesh.rows, 3)
+        XCTAssertTrue(mesh.isEvenlySpaced)
+        XCTAssertEqual(mesh.offsets.count, 12)
+    }
+
+    /// A hand-edited or corrupted file must not be able to produce a grid the
+    /// renderer can index out of bounds.
+    func testCorruptLinePositionsAreRepaired() throws {
+        let json = """
+        {"columnPositions": [0.9, 0.2, 0.2, -3, 42, 0.5],
+         "rowPositions": [0.5], "offsets": []}
+        """
+        let mesh = try JSONDecoder().decode(MeshWarp.self, from: Data(json.utf8))
+        XCTAssertEqual(mesh.columnPositions.first, 0)
+        XCTAssertEqual(mesh.columnPositions.last, 1)
+        XCTAssertEqual(mesh.columnPositions, mesh.columnPositions.sorted())
+        XCTAssertEqual(mesh.offsets.count, mesh.pointCount)
+        XCTAssertEqual(mesh.scanOffsets.count, mesh.pointCount)
+    }
+}

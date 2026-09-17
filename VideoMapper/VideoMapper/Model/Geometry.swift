@@ -120,6 +120,18 @@ enum Homography {
                                        SIMD3<Float>(Float(c), Float(f), 1)))
     }
 
+    /// Inverse of a homography, or nil when the quad has collapsed.
+    ///
+    /// Needed to go the other way: from a point on the canvas back to where it sits
+    /// inside the layer, which is what turns a tap into a position on the surface.
+    static func invert(_ m: simd_float3x3) -> simd_float3x3? {
+        let determinant = m.determinant
+        guard abs(determinant) > 1e-9, determinant.isFinite else { return nil }
+        let inverse = m.inverse
+        guard inverse.columns.0.x.isFinite else { return nil }
+        return inverse
+    }
+
     /// Applies a homography to a point, dividing through by the homogeneous coordinate.
     static func apply(_ m: simd_float3x3, to point: CGPoint) -> CGPoint {
         let v = m * SIMD3<Float>(Float(point.x), Float(point.y), 1)

@@ -13,10 +13,37 @@ image sit flat on an angled wall instead of looking like a skewed rectangle.
 
 **Correct what four corners cannot.** Four corners describe a flat surface exactly,
 and nothing else. For a curved wall, a column, a sagging cloth or panels that do not
-sit flush, raise the **Correction grid** in the inspector to 2x2 and up to 8x8: the
-layer gains control points in between, and each is dragged on the stage in Warp mode.
-Subdividing never moves a mapping you have already aligned — the points start exactly
-where the corner warp already puts them.
+sit flush, the layer gains control points in between, each dragged on the stage in
+Warp mode. Two ways to add them:
+
+- **An even grid.** The inspector's **Correction grid** pickers lay out 2x2 up to
+  8x8 in one tap.
+- **One point where you want it.** In Warp mode, **double-tap the stage** and a point
+  goes in under your finger; double-tap a point to take it away again. The grid keeps
+  the positions of its dividing lines rather than a count, so the spacing can be
+  uneven — crowd points where a surface bends, leave them sparse where it is flat, up
+  to 12 divisions each way.
+
+A point arrives with the rest of its row and column, not alone. That is deliberate:
+the renderer draws every cell as a quad with its own homography, which is what keeps
+perspective correct inside each one. Free-floating points would need the surface
+triangulated, and a triangle can only carry an affine map — straight lines in the
+content would kink at every shared edge.
+
+Adding points never moves a mapping you have already aligned, by either route: the
+points start exactly where the corner warp already puts them.
+
+**Handles say what they are.** Corners are labelled TL/TR/BR/BL and interior points
+by their column and row, so "pull 3·2 left a bit" means something across a room.
+
+**Points snap to each other.** Drag a control point near a point of another layer,
+near another point of the same layer, or near an edge or centre line of the frame,
+and it lands on it exactly, with a badge naming what it caught. This is not a
+convenience: two mapped surfaces a pixel apart leave a black hairline on the wall and
+two that overlap by a pixel leave a bright one, neither is fixable by eye from where
+you stand next to a projector, and landing on the same coordinate is the only thing
+that removes the seam outright. Turn it off in the inspector's **Correction grid**
+section if you need free placement.
 
 **Scan the surface you are projecting onto.** Stand where the projector is, aim the
 phone the way it is aimed, and capture. The photo goes under the stage at an
@@ -30,10 +57,18 @@ correction grid so the content sits on a column or a curved wall the way it woul
 on a flat one. A flat wall produces no change at all, by construction — see
 [ARCHITECTURE.md](ARCHITECTURE.md) for why, and for what this is not.
 
-**Set the canvas to the projector's frame.** The toolbar's aspect-ratio button opens
-the stage settings: 16:9, 16:10, 5:4, square, portrait, or any size you type in. Layer
-positions are normalized, so changing the canvas keeps the mapping and only changes
-the frame around it.
+**Set the canvas to the projector's frame.** The toolbar's aspect-ratio button is a
+menu: 16:9, 16:10, 5:4, square and portrait are one tap, and **Custom** opens the
+stage settings for any size you type in. Layer positions are normalized, so changing
+the canvas keeps the mapping and only changes the frame around it.
+
+**Work full screen.** The expand button on the stage hands the whole screen to it,
+with every gesture still live — corners dragged, points added, layers selected — so a
+mapping is dialled in at a size where a few pixels of misalignment are actually
+visible. The play button does the same for a show, and perform mode carries a
+Move/Warp picker so a surface can be nudged mid-set without dropping back to the
+editor. A new layer fills the frame, so its handles start at the edges of the picture
+rather than somewhere in the middle of it.
 
 **Swap content without rebuilding the mapping.** Aligning a surface is the slow part;
 what plays inside it is not. The inspector's **Content** section shows a preview of
@@ -85,7 +120,7 @@ elements read far better on a wall than bright, busy ones.
 | --- | --- | --- |
 | Size / position / rotation | free | Pinch and twist on stage, or use the sliders |
 | Corner warp | free | Four pins; folded quads are rejected |
-| Correction grid | up to 8x8 cells | Extra points inside the layer, for surfaces that are not flat |
+| Correction grid | up to 12x12 cells | Even grids from the pickers, single points by double-tapping the stage |
 | Intensity | 0–4x | Above 1 deliberately blows out highlights for dark surfaces |
 | Opacity | 0–100% | |
 | Colour + mix | any colour | Tints the layer, or paints a solid colour layer |
@@ -110,6 +145,38 @@ to want and costs nothing.
 - **Listen** — the microphone drives the show, so it locks to music from a PA
   system or anything else this app has no digital link to.
 - **Free run** — a plain timer, for programming in silence.
+
+**Move only while the music plays.** Audio → *While the music plays* holds the show
+still until it hears something and picks up from the same frame when the music comes
+back. On the Track clock that follows the transport exactly. On Listen it is a level
+you set against the live meter — "music" from a microphone really means "louder than
+this room's own floor", and that floor is different in a gallery and in a bar. Either
+way the show keeps running for a moment after the music drops, so a gap between
+tracks reads as a pause rather than a stutter.
+
+### Where the music can come from
+
+| Source | How |
+| --- | --- |
+| Files, AirDrop, iCloud Drive | **Audio → Choose → Files** |
+| The device's music library | **Audio → Choose → Music library** |
+| Apple Music, SoundCloud, Spotify, YouTube | **Listen** mode |
+
+**Music library** reaches the songs the device holds unencrypted — what you bought,
+synced, or ripped. Apple Music downloads are usually not among them: catalogue audio
+is encrypted, only Apple's own player can decrypt it, and no app can read its samples.
+The picker will tell you when a track is one of those rather than failing quietly.
+
+There is no import for the streaming services, and this is not an oversight. Apple
+Music, SoundCloud, Spotify and YouTube all decode audio inside their own player and
+none of them expose the samples; SoundCloud has no third-party iOS playback SDK at
+all. Nothing inside an app can change that.
+
+Listen mode is the way round it and it is not a consolation prize: play the music
+from any app or from the PA in the room, and the microphone gives the show its level,
+its bands, its beat and its tempo. The one thing it cannot do is guarantee two phones
+play the same thing at the same instant — for that the audio has to be a file both
+devices hold, which is what **Music library** and **Files** are for.
 
 Tempo is found automatically. The analyser estimates BPM from the audio and reports
 how much the estimate agrees with itself; while that confidence is low — a rubato
@@ -198,8 +265,9 @@ cannot express, is what the scan recovers.
 ### Permissions
 
 On first use the app asks for the photo library (importing media), the microphone
-(Listen mode only), the camera (scanning only), and the local network (device sync
-only). Denying any of them leaves the rest of the app working.
+(Listen mode only), the camera (scanning only), the music library (choosing a track
+from it only), and the local network (device sync only). Denying any of them leaves
+the rest of the app working.
 
 ## Connecting a projector
 

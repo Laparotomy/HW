@@ -32,6 +32,16 @@ final class ShowController: ObservableObject {
     @Published private(set) var trackMismatch = false
     /// Non-nil while a projector or TV is attached over HDMI or AirPlay.
     @Published var externalDisplay: ExternalDisplayInfo?
+    /// Whether dragged control points are pulled onto nearby ones.
+    ///
+    /// An editing preference rather than part of the show: it changes how the stage
+    /// behaves under your finger, not what the projector puts on the wall, and a
+    /// follower device has no reason to inherit it.
+    @Published var snapsPoints = true
+    /// True while the show is held still waiting for music. Deliberately not
+    /// published — like `showTime` it changes on the frame clock, and the transport
+    /// read-out already polls at a rate a human can see.
+    private(set) var isWaitingForMusic = false
 
     enum StageMode: String, CaseIterable, Identifiable {
         case move, warp
@@ -60,6 +70,8 @@ final class ShowController: ObservableObject {
     private var hostTransport: TransportSnapshot?
     private var lastBroadcast: Double = 0
     private var lastFollowerAudioCheck: Double = 0
+    /// Last moment the analyser heard something above the gate.
+    private var lastAudibleTime: Double = -.greatestFiniteMagnitude
 
     // MARK: - Init
 
@@ -217,6 +229,18 @@ final class ShowController: ObservableObject {
         }
 
         guard isPlaying else { return }
+
+        if audio.features.level > project.audio.musicGateLevel { lastAudibleTime = HostClock.now }
+        let holding = project.audio.animateOnlyWithMusic && !musicIsSounding
+        if isWaitingForMusic != holding { isWaitingForMusic = holding }
+        if holding {
+            // Re-anchor on every held frame so the clock resumes from where it
+            // stopped rather than jumping forward by however long the silence was.
+            anchorShowTime = showTime - project.audio.latencyOffset
+            anchorLocalTime = HostClock.now
+            return
+        }
+
         switch project.audio.clockSource {
         case .track where audio.hasTrack:
             showTime = max(0, audio.trackPosition) + project.audio.latencyOffset
@@ -224,6 +248,29 @@ final class ShowController: ObservableObject {
             showTime = anchorShowTime + (HostClock.now - anchorLocalTime) + project.audio.latencyOffset
         }
     }
+
+    /// Whether music is sounding right now.
+    ///
+    /// A loaded track answers from the transport, which is exact. Everything else has
+    /// to answer from the microphone, where "is music playing" is really "is this room
+    /// louder than its own floor" — hence a gate the operator can set by eye against
+    /// the live meter, and a hold so a break in the music is not a break in the show.
+    var musicIsSounding: Bool {
+        switch project.audio.clockSource {
+        // Free-run has no music to wait for, and the analyser is not even running,
+        // so gating here could only ever freeze the show for good.
+        case .freeRun: return true
+        case .track: return audio.hasTrack ? audio.isPlaying : heardMusicRecently
+        case .listen: return heardMusicRecently
+        }
+    }
+
+    private var heardMusicRecently: Bool {
+        HostClock.now - lastAudibleTime < AudioSettings.musicGateHold
+    }
+
+    /// Whether holding for music can do anything in the current clock source.
+    var musicGateApplies: Bool { project.audio.clockSource != .freeRun }
 
     // MARK: - Transport
 
@@ -394,6 +441,54 @@ final class ShowController: ObservableObject {
     func moveLayers(from offsets: IndexSet, to destination: Int) {
         project.layers.move(fromOffsets: offsets, toOffset: destination)
         broadcastProject()
+    }
+
+    // MARK: - Correction points
+
+    /// Why a tap could not put a point where it was aimed.
+    enum MeshEditFailure: Equatable {
+        case crowded
+        case full
+        case outsideLayer
+
+        var message: String {
+            switch self {
+            case .crowded: return "Too close to a line that is already there."
+            case .full: return "This grid is at its limit of \(MeshWarp.maximumDivisions) divisions."
+            case .outsideLayer: return "Tap inside the layer to add a point."
+            }
+        }
+    }
+
+    /// Adds a correction point where the stage was tapped.
+    @discardableResult
+    func insertMeshPoint(near position: CGPoint, inLayer id: UUID) -> MeshEditFailure? {
+        guard let index = project.index(of: id) else { return .outsideLayer }
+        var transform = project.layers[index].transform
+        guard transform.meshParameter(at: position) != nil else { return .outsideLayer }
+
+        let atCap = transform.mesh.columns >= MeshWarp.maximumDivisions
+            && transform.mesh.rows >= MeshWarp.maximumDivisions
+        guard transform.insertMeshPoint(near: position) else {
+            return atCap ? .full : .crowded
+        }
+        project.layers[index].transform = transform
+        saveNow()
+        broadcastProject()
+        return nil
+    }
+
+    /// Removes the correction point at `index`, and with it the rest of its row and
+    /// column. Returns false for the four corners, which are the layer's own shape.
+    @discardableResult
+    func removeMeshPoint(_ index: Int, inLayer id: UUID) -> Bool {
+        guard let layerIndex = project.index(of: id) else { return false }
+        var transform = project.layers[layerIndex].transform
+        guard transform.removeMeshPoint(index) else { return false }
+        project.layers[layerIndex].transform = transform
+        saveNow()
+        broadcastProject()
+        return true
     }
 
     /// Applies an edit to a layer in place.
