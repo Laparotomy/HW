@@ -29,7 +29,7 @@ final class GeneratorThumbnailRenderer {
     private let white: MTLTexture?
     private let log = Logger(subsystem: "app.videomapper", category: "Thumbnails")
 
-    private var cache: [GeneratorKind: CGImage] = [:]
+    private var cache: [String: CGImage] = [:]
 
     private init() {
         guard let device = MTLCreateSystemDefaultDevice(),
@@ -72,16 +72,18 @@ final class GeneratorThumbnailRenderer {
         pipeline = built
     }
 
-    /// Returns a preview of `kind` with its default settings, rendering it once and
-    /// keeping it for the life of the process.
-    func image(for kind: GeneratorKind) -> CGImage? {
-        if let cached = cache[kind] { return cached }
-        guard let image = render(kind) else { return nil }
-        cache[kind] = image
+    /// Returns a preview of `kind`, rendering it once and keeping it for the life of
+    /// the process. Pass a palette to preview a layer's actual colours rather than
+    /// the library default.
+    func image(for kind: GeneratorKind, palette: GeneratorPalette? = nil) -> CGImage? {
+        let key = "\(kind.rawValue):\(palette?.rawValue ?? "default")"
+        if let cached = cache[key] { return cached }
+        guard let image = render(kind, palette: palette) else { return nil }
+        cache[key] = image
         return image
     }
 
-    private func render(_ kind: GeneratorKind) -> CGImage? {
+    private func render(_ kind: GeneratorKind, palette: GeneratorPalette?) -> CGImage? {
         guard let device, let queue, let pipeline, let sampler, let white else { return nil }
 
         let descriptor = MTLTextureDescriptor.texture2DDescriptor(
@@ -100,7 +102,7 @@ final class GeneratorThumbnailRenderer {
         pass.colorAttachments[0].clearColor = MTLClearColor(red: 0, green: 0, blue: 0, alpha: 1)
 
         guard let encoder = commandBuffer.makeRenderCommandEncoder(descriptor: pass) else { return nil }
-        var uniforms = Self.uniforms(for: kind)
+        var uniforms = Self.uniforms(for: kind, palette: palette)
         encoder.setRenderPipelineState(pipeline)
         encoder.setVertexBytes(&uniforms, length: MemoryLayout<LayerUniforms>.stride, index: 0)
         encoder.setFragmentBytes(&uniforms, length: MemoryLayout<LayerUniforms>.stride, index: 0)
@@ -117,8 +119,10 @@ final class GeneratorThumbnailRenderer {
     }
 
     /// A full-bleed quad with the generator's default look, at the preview time.
-    private static func uniforms(for kind: GeneratorKind) -> LayerUniforms {
-        let settings = kind.defaultSettings.clamped()
+    private static func uniforms(for kind: GeneratorKind,
+                                 palette: GeneratorPalette?) -> LayerUniforms {
+        var settings = kind.defaultSettings.clamped()
+        if let palette { settings.palette = palette }
         let aspect = Double(size.width) / Double(size.height)
         // A strobe caught mid-decay is a black rectangle; show it lit instead.
         let drive: Float = kind == .strobe ? 0.85 : 0.35
@@ -131,7 +135,8 @@ final class GeneratorThumbnailRenderer {
             params3: SIMD4(0, 0, Float(aspect), 0),
             params4: SIMD4(kind.shaderIndex, Float(settings.speed),
                            Float(settings.scale), Float(settings.complexity)),
-            params5: SIMD4(settings.palette.shaderIndex, drive, Float(settings.variation), 0))
+            params5: SIMD4(settings.palette.shaderIndex, drive, Float(settings.variation), 0),
+            params6: SIMD4(0, 0, 1, 1))
     }
 
     private static func makeImage(from texture: MTLTexture) -> CGImage? {

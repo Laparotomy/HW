@@ -13,6 +13,8 @@ struct AudioFeatures: Equatable {
     /// Decaying envelope that peaks on each detected beat.
     var beat: Double = 0
     var bpm: Double = 0
+    /// How much the detected tempo agrees with itself, 0...1. See `BeatTracker`.
+    var tempoConfidence: Double = 0
 
     func value(for source: ModulationSource) -> Double {
         switch source {
@@ -285,6 +287,7 @@ final class AudioEngineController: ObservableObject {
         beats.process(flux: spectrum.flux, at: analysisTime)
         let bpm = beats.bpm
         let beat = beats.beatEnvelope
+        let confidence = beats.tempoConfidence
 
         DispatchQueue.main.async { [weak self] in
             guard let self else { return }
@@ -299,6 +302,7 @@ final class AudioEngineController: ObservableObject {
             next.treble = follow(self.features.treble, Double(spectrum.treble))
             next.beat = beat
             next.bpm = bpm
+            next.tempoConfidence = confidence
             self.features = next
         }
     }

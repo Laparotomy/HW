@@ -4,12 +4,18 @@ import SwiftUI
 /// Everything about the selected layer: shape, look, texture, and audio routing.
 struct InspectorPanel: View {
     @ObservedObject var controller: ShowController
+    @ObservedObject private var thumbnails = ContentThumbnailStore.shared
     @State private var texturePickerItem: PhotosPickerItem?
+    @State private var contentPickerItem: PhotosPickerItem?
+    @State private var isPickingContent = false
+    @State private var isBrowsingSources = false
+    @State private var contentError: String?
 
     var body: some View {
         Group {
             if let layer = controller.selectedLayer {
                 Form {
+                    contentSection(layer)
                     transformSection(layer)
                     lookSection(layer)
                     textureSection(layer)
@@ -26,6 +32,120 @@ struct InspectorPanel: View {
                 ContentUnavailableView("No layer selected",
                                        systemImage: "square.3.layers.3d",
                                        description: Text("Pick a layer in the Layers tab, or tap one on the stage."))
+            }
+        }
+        .photosPicker(isPresented: $isPickingContent, selection: $contentPickerItem,
+                      matching: .any(of: [.images, .videos]))
+        .onChange(of: contentPickerItem) { _, item in
+            guard let item else { return }
+            contentPickerItem = nil
+            fillSelectedLayer(with: item)
+        }
+        .sheet(isPresented: $isBrowsingSources) {
+            GeneratorBrowser(controller: controller,
+                             replacingLayerID: controller.selectedLayerID)
+        }
+        .alert("Could not load that file", isPresented: Binding(
+            get: { contentError != nil },
+            set: { if !$0 { contentError = nil } })) {
+            Button("OK", role: .cancel) { contentError = nil }
+        } message: {
+            Text(contentError ?? "")
+        }
+    }
+
+    // MARK: - Content
+
+    /// What the layer is showing, with a preview and a way to change it without
+    /// building a new layer — the mapping is the expensive part, the content inside
+    /// it is not.
+    @ViewBuilder
+    private func contentSection(_ layer: MappingLayer) -> some View {
+        Section("Content") {
+            HStack(spacing: 12) {
+                preview(for: layer)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(layer.content.displayName)
+                        .font(.subheadline.weight(.medium))
+                        .lineLimit(1)
+                    Text(contentDetail(layer))
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                Spacer()
+            }
+
+            Button {
+                isPickingContent = true
+            } label: {
+                Label("Choose photo or video", systemImage: "photo.on.rectangle.angled")
+            }
+            Button {
+                isBrowsingSources = true
+            } label: {
+                Label("Choose generated source", systemImage: "sparkles.rectangle.stack")
+            }
+            if layer.content.media != nil || layer.content.generator != nil {
+                Button(role: .destructive) {
+                    controller.setContent(.solid, forLayer: layer.id)
+                    controller.updateLayer(id: layer.id) { $0.appearance.tintAmount = 1 }
+                    controller.saveNow()
+                } label: {
+                    Label("Empty this layer", systemImage: "xmark.square")
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func preview(for layer: MappingLayer) -> some View {
+        let shape = RoundedRectangle(cornerRadius: 6)
+        Group {
+            if let image = thumbnails.image(for: layer.content,
+                                            projectID: controller.project.id) {
+                Image(decorative: image, scale: 1)
+                    .resizable()
+                    .aspectRatio(contentMode: .fill)
+            } else if case .solid = layer.content {
+                layer.appearance.tint.color
+            } else {
+                // Media still decoding, or a file that has gone missing.
+                Color.black.overlay {
+                    Image(systemName: "photo")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+        }
+        .frame(width: 72, height: 41)
+        .clipShape(shape)
+        .overlay(shape.stroke(Color.primary.opacity(0.15)))
+        .accessibilityHidden(true)
+    }
+
+    private func contentDetail(_ layer: MappingLayer) -> String {
+        switch layer.content {
+        case .solid:
+            return "Colour wash"
+        case .image(let ref):
+            return String(format: "Still · %.0f x %.0f", ref.pixelSize.width, ref.pixelSize.height)
+        case .video(let ref, let playback):
+            let speed = playback.rate == 1 ? "" : String(format: " · %.2fx", playback.rate)
+            return String(format: "Clip · %.1fs", ref.duration) + speed
+        case .generator:
+            return "Generated · no file, any resolution"
+        }
+    }
+
+    private func fillSelectedLayer(with item: PhotosPickerItem) {
+        guard let id = controller.selectedLayerID else { return }
+        Task { @MainActor in
+            do {
+                let ref = try await MediaImporter.importItem(item, projectID: controller.project.id)
+                controller.setMedia(ref, forLayer: id)
+                controller.saveNow()
+            } catch {
+                contentError = error.localizedDescription
             }
         }
     }
@@ -75,6 +195,55 @@ struct InspectorPanel: View {
                 .disabled(!layer.transform.isWarped)
             }
             .buttonStyle(.bordered)
+        }
+
+        meshSection(layer)
+    }
+
+    // MARK: - Mesh
+
+    /// Correction points beyond the four corners.
+    ///
+    /// Four corners describe a flat surface exactly. Anything that is not flat — a
+    /// curved wall, a column, a sagging cloth, panels that do not sit flush — needs
+    /// points in between, and this is where they are added.
+    @ViewBuilder
+    private func meshSection(_ layer: MappingLayer) -> some View {
+        let mesh = layer.transform.mesh
+        Section("Correction grid") {
+            Picker("Across", selection: Binding(
+                get: { mesh.columns },
+                set: { newValue in
+                    controller.updateLayer(id: layer.id) {
+                        $0.transform.setMeshDivisions(columns: newValue, rows: mesh.rows)
+                    }
+                    controller.saveNow()
+                })) {
+                ForEach(MeshWarp.availableDivisions, id: \.self) { Text("\($0)").tag($0) }
+            }
+            Picker("Down", selection: Binding(
+                get: { mesh.rows },
+                set: { newValue in
+                    controller.updateLayer(id: layer.id) {
+                        $0.transform.setMeshDivisions(columns: mesh.columns, rows: newValue)
+                    }
+                    controller.saveNow()
+                })) {
+                ForEach(MeshWarp.availableDivisions, id: \.self) { Text("\($0)").tag($0) }
+            }
+
+            Text(mesh.isSubdivided
+                 ? "\(mesh.pointCount) points. Switch the stage to Warp and drag any of them."
+                 : "Four corners only. Raise a number above to add points in between.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
+            if mesh.isWarped {
+                Button("Flatten grid") {
+                    controller.updateLayer(id: layer.id) { $0.transform.mesh.reset() }
+                    controller.saveNow()
+                }
+            }
         }
     }
 
@@ -169,8 +338,11 @@ struct InspectorPanel: View {
         Section("Clip") {
             Toggle("Loop", isOn: playbackBinding.loops)
             Toggle("Lock to show clock", isOn: playbackBinding.followsShowClock)
-            LabeledSlider(title: "Speed", value: playbackBinding.rate, range: 0.1...3,
-                          format: { String(format: "%.2fx", $0) })
+            // Per layer, so two clips in one show can run at different speeds.
+            // Zero is a freeze on the start frame rather than a disabled state.
+            LabeledSlider(title: "Playback speed", value: playbackBinding.rate,
+                          range: VideoPlayback.rateRange,
+                          format: { $0 <= 0 ? "Frozen" : String(format: "%.2fx", $0) })
             LabeledSlider(title: "Clip volume", value: playbackBinding.volume, range: 0...1,
                           format: percent)
             if ref.duration > 0 {

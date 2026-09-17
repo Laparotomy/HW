@@ -7,6 +7,9 @@ import SwiftUI
 /// and every parameter stays editable in the inspector afterwards.
 struct GeneratorBrowser: View {
     @ObservedObject var controller: ShowController
+    /// When set, picking a source fills that layer instead of adding a new one, so a
+    /// surface you already aligned keeps its mapping.
+    var replacingLayerID: UUID?
     @Environment(\.dismiss) private var dismiss
 
     private let columns = [GridItem(.adaptive(minimum: 150), spacing: 12)]
@@ -17,8 +20,7 @@ struct GeneratorBrowser: View {
                 LazyVGrid(columns: columns, spacing: 12) {
                     ForEach(GeneratorKind.allCases) { kind in
                         Button {
-                            controller.addGeneratorLayer(kind)
-                            dismiss()
+                            pick(kind)
                         } label: {
                             cell(for: kind)
                         }
@@ -38,7 +40,7 @@ struct GeneratorBrowser: View {
                     .padding(.horizontal)
                     .padding(.bottom, 24)
             }
-            .navigationTitle("Sources")
+            .navigationTitle(replacingLayerID == nil ? "Sources" : "Fill Layer")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
@@ -46,6 +48,16 @@ struct GeneratorBrowser: View {
                 }
             }
         }
+    }
+
+    private func pick(_ kind: GeneratorKind) {
+        if let id = replacingLayerID {
+            controller.setContent(.generator(kind, kind.defaultSettings), forLayer: id)
+        } else {
+            controller.addGeneratorLayer(kind)
+        }
+        controller.saveNow()
+        dismiss()
     }
 
     private func cell(for kind: GeneratorKind) -> some View {

@@ -124,6 +124,7 @@ final class ModulationEngine {
 
         return ResolvedLayer(id: layer.id,
                              quad: transform.quad(scale: scale),
+                             cells: transform.meshCells(scale: scale),
                              appearance: appearance,
                              content: layer.content,
                              generatorDrive: offsets.generatorDrive)

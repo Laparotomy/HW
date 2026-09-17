@@ -102,7 +102,10 @@ final class VideoTextureSource: TextureSource {
 
     /// Where in the clip the show clock says we should be.
     private func targetTime(showTime: Double) -> Double {
-        var t = playback.startOffset + showTime * max(playback.rate, 0.01)
+        // Rate zero is a deliberate freeze, not a degenerate case: it holds the clip
+        // on its start frame so a layer can be used as a still without importing one.
+        guard playback.rate > 0 else { return max(playback.startOffset, 0) }
+        var t = playback.startOffset + showTime * playback.rate
         if duration > 0 {
             if playback.loops {
                 t = t.truncatingRemainder(dividingBy: duration)
@@ -138,11 +141,34 @@ final class VideoTextureSource: TextureSource {
         retainedTexture.flatMap { CVMetalTextureGetTexture($0) }
     }
 
+    /// Jumps the player to `target`, ignoring the request if a seek is already in
+    /// flight — stacking seeks on a drifting clip makes the drift worse, not better.
+    private func seekIfNeeded(to target: Double) {
+        guard !isSeeking else { return }
+        let actual = CMTimeGetSeconds(player.currentTime())
+        if actual.isFinite, abs(actual - target) < Self.deadband { return }
+        isSeeking = true
+        let time = CMTime(seconds: target, preferredTimescale: 600)
+        player.seek(to: time, toleranceBefore: .zero, toleranceAfter: .zero) { [weak self] _ in
+            guard let self else { return }
+            self.isSeeking = false
+            self.player.rate = Float(self.playback.rate)
+        }
+    }
+
     private func syncTransport(showTime: Double, isPlaying: Bool) {
         guard player.currentItem != nil else { return }
 
         guard isPlaying else {
             if player.rate != 0 { player.pause() }
+            return
+        }
+
+        // A frozen clip is simply paused. Calling play() first would momentarily run
+        // it at 1x before the rate assignment lands, which reads as a twitch.
+        guard playback.rate > 0 else {
+            if player.rate != 0 { player.pause() }
+            if playback.followsShowClock { seekIfNeeded(to: targetTime(showTime: showTime)) }
             return
         }
 
@@ -164,13 +190,7 @@ final class VideoTextureSource: TextureSource {
         }
 
         if abs(error) > Self.seekThreshold {
-            guard !isSeeking else { return }
-            isSeeking = true
-            let time = CMTime(seconds: target, preferredTimescale: 600)
-            player.seek(to: time, toleranceBefore: .zero, toleranceAfter: .zero) { [weak self] _ in
-                self?.isSeeking = false
-                self?.player.rate = Float(self?.playback.rate ?? 1)
-            }
+            seekIfNeeded(to: target)
             return
         }
 

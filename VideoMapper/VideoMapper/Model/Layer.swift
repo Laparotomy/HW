@@ -21,6 +21,10 @@ struct MediaReference: Codable, Equatable, Hashable, Identifiable {
 
 /// Per-layer video transport options.
 struct VideoPlayback: Codable, Equatable {
+    /// Per-layer speed range. Zero freezes the clip on its start frame; 4x is as fast
+    /// as AVPlayer will run a file without stuttering on a phone.
+    static let rateRange: ClosedRange<Double> = 0...4
+
     var loops: Bool = true
     var rate: Double = 1
     var volume: Double = 0
@@ -78,6 +82,41 @@ struct LayerTransform: Codable, Equatable {
     var rotation: Double = 0
     /// Free-form corner pins, added after rotation, in normalized canvas units.
     var cornerOffsets: [CGPoint] = Array(repeating: .zero, count: 4)
+    /// Extra correction points inside the quad, for surfaces four corners cannot
+    /// describe. Defaults to a single cell, which behaves exactly like no mesh.
+    var mesh: MeshWarp = MeshWarp()
+
+    init(center: CGPoint = CGPoint(x: 0.5, y: 0.5),
+         size: CGSize = CGSize(width: 0.6, height: 0.6),
+         rotation: Double = 0,
+         cornerOffsets: [CGPoint] = Array(repeating: .zero, count: 4),
+         mesh: MeshWarp = MeshWarp()) {
+        self.center = center
+        self.size = size
+        self.rotation = rotation
+        self.cornerOffsets = cornerOffsets
+        self.mesh = mesh
+    }
+
+    /// Decoded field by field with defaults so a show saved before a field existed
+    /// still opens. A synthesised decoder would reject the older file outright.
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        center = try container.decodeIfPresent(CGPoint.self, forKey: .center)
+            ?? CGPoint(x: 0.5, y: 0.5)
+        size = try container.decodeIfPresent(CGSize.self, forKey: .size)
+            ?? CGSize(width: 0.6, height: 0.6)
+        rotation = try container.decodeIfPresent(Double.self, forKey: .rotation) ?? 0
+        let corners = try container.decodeIfPresent([CGPoint].self, forKey: .cornerOffsets) ?? []
+        cornerOffsets = corners.count == 4
+            ? corners
+            : Array(corners.prefix(4)) + Array(repeating: .zero, count: max(0, 4 - corners.count))
+        mesh = try container.decodeIfPresent(MeshWarp.self, forKey: .mesh) ?? MeshWarp()
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case center, size, rotation, cornerOffsets, mesh
+    }
 
     /// The mapped quad, with an optional uniform scale applied last (used by
     /// audio modulation so reactive scaling never overwrites the stored size).
@@ -111,10 +150,109 @@ struct LayerTransform: Codable, Equatable {
 
     mutating func resetWarp() {
         cornerOffsets = Array(repeating: .zero, count: 4)
+        mesh.reset()
     }
 
     var isWarped: Bool {
-        cornerOffsets.contains { $0.x != 0 || $0.y != 0 }
+        cornerOffsets.contains { $0.x != 0 || $0.y != 0 } || mesh.isWarped
+    }
+
+    // MARK: - Mesh
+
+    /// Control point positions in canvas space.
+    ///
+    /// The base position of a point is the quad's own projective map of its (u, v) —
+    /// not a bilinear interpolation of the corners. That is what makes an unwarped
+    /// mesh invisible: every point already sits exactly where the homography puts it,
+    /// so adding points to a finished mapping does not shift the image by a pixel.
+    func meshPoints(scale: Double = 1) -> [CGPoint] {
+        let matrix = Homography.unitSquare(to: quad(scale: scale))
+        var points: [CGPoint] = []
+        points.reserveCapacity(mesh.pointCount)
+        for row in 0...mesh.rows {
+            for column in 0...mesh.columns {
+                let parameter = mesh.parameter(column: column, row: row)
+                let base = Homography.apply(matrix, to: parameter)
+                let offset = mesh.offset(column: column, row: row)
+                points.append(CGPoint(x: base.x + offset.x, y: base.y + offset.y))
+            }
+        }
+        return points
+    }
+
+    /// The layer broken into drawable cells, each with the slice of the layer's
+    /// texture that belongs to it. A 1 x 1 mesh yields exactly one cell covering the
+    /// whole quad, which is the un-subdivided case.
+    func meshCells(scale: Double = 1) -> [MeshCell] {
+        guard mesh.isSubdivided else {
+            return [MeshCell(quad: quad(scale: scale), uvOrigin: .zero,
+                             uvSize: CGSize(width: 1, height: 1))]
+        }
+
+        let points = meshPoints(scale: scale)
+        let across = mesh.pointsAcross
+        let cellWidth = 1.0 / Double(mesh.columns)
+        let cellHeight = 1.0 / Double(mesh.rows)
+
+        var cells: [MeshCell] = []
+        cells.reserveCapacity(mesh.cellCount)
+        for row in 0..<mesh.rows {
+            for column in 0..<mesh.columns {
+                let topLeft = row * across + column
+                // Quad corner order is (0,0), (1,0), (1,1), (0,1).
+                let quad = Quad(p00: points[topLeft],
+                                p10: points[topLeft + 1],
+                                p11: points[topLeft + across + 1],
+                                p01: points[topLeft + across])
+                cells.append(MeshCell(
+                    quad: quad,
+                    uvOrigin: CGPoint(x: Double(column) * cellWidth,
+                                      y: Double(row) * cellHeight),
+                    uvSize: CGSize(width: cellWidth, height: cellHeight)))
+            }
+        }
+        return cells
+    }
+
+    /// Rewrites a mesh offset so the control point lands on `position`.
+    mutating func setMeshPoint(_ index: Int, to position: CGPoint, scale: Double = 1) {
+        guard (0..<mesh.pointCount).contains(index) else { return }
+        var probe = self
+        probe.mesh.setOffset(.zero, at: index)
+        let base = probe.meshPoints(scale: scale)[index]
+        mesh.setOffset(CGPoint(x: position.x - base.x, y: position.y - base.y), at: index)
+    }
+
+    /// Changes the grid, keeping the correction already dialled in.
+    mutating func setMeshDivisions(columns: Int, rows: Int) {
+        mesh = mesh.resized(columns: columns, rows: rows)
+    }
+
+    /// True when every cell touching `index` stays convex — a folded cell makes its
+    /// homography degenerate and the patch turns inside out or disappears.
+    func meshIsDrawable(movingPointAt index: Int, to position: CGPoint,
+                        scale: Double = 1) -> Bool {
+        guard (0..<mesh.pointCount).contains(index) else { return false }
+
+        var probe = self
+        probe.mesh.setOffset(.zero, at: index)
+        let unoffset = probe.meshPoints(scale: scale)[index]
+        probe.mesh.setOffset(CGPoint(x: position.x - unoffset.x,
+                                     y: position.y - unoffset.y), at: index)
+
+        let cells = probe.meshCells(scale: scale)
+        let column = index % mesh.pointsAcross
+        let row = index / mesh.pointsAcross
+
+        // The point is shared by up to four cells; only those can have folded.
+        for cellRow in (row - 1)...row where (0..<mesh.rows).contains(cellRow) {
+            for cellColumn in (column - 1)...column where (0..<mesh.columns).contains(cellColumn) {
+                let cellIndex = cellRow * mesh.columns + cellColumn
+                guard cells.indices.contains(cellIndex) else { continue }
+                if !cells[cellIndex].quad.isConvex { return false }
+            }
+        }
+        return true
     }
 }
 

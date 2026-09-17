@@ -21,16 +21,59 @@ enum ClockSource: String, Codable, CaseIterable, Identifiable {
     }
 }
 
+/// Where the show's tempo comes from.
+enum TempoMode: String, Codable, CaseIterable, Identifiable {
+    /// Follow the tempo recovered from the audio, falling back to the manual value
+    /// while detection is still unsure of itself.
+    case automatic
+    /// Ignore detection and use the manual tempo, for music the analyser cannot
+    /// read or a set that has to stay on a fixed grid.
+    case manual
+
+    var id: String { rawValue }
+    var displayName: String {
+        switch self {
+        case .automatic: return "Automatic"
+        case .manual: return "Manual"
+        }
+    }
+}
+
 struct AudioSettings: Codable, Equatable {
+    /// Below this, a detected tempo is treated as a guess and the manual value is
+    /// used instead. See `BeatTracker.tempoConfidence`.
+    static let confidenceThreshold: Double = 0.45
+
     var track: MediaReference?
     var clockSource: ClockSource = .freeRun
     var volume: Double = 1
     var loops: Bool = true
-    /// Manual tempo used by beat-driven modulation when no track is loaded.
+    var tempoMode: TempoMode = .automatic
+    /// Tempo used by beat-driven modulation when detection is unavailable or the
+    /// mode is manual.
     var manualBPM: Double = 120
     /// Positive values delay the visuals, to compensate for speaker distance
     /// or a projector's input lag.
     var latencyOffset: Double = 0
+
+    init() {}
+
+    /// Decoded field by field with defaults, so a show saved before `tempoMode`
+    /// existed still opens instead of failing to decode.
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        track = try container.decodeIfPresent(MediaReference.self, forKey: .track)
+        clockSource = try container.decodeIfPresent(ClockSource.self, forKey: .clockSource) ?? .freeRun
+        volume = try container.decodeIfPresent(Double.self, forKey: .volume) ?? 1
+        loops = try container.decodeIfPresent(Bool.self, forKey: .loops) ?? true
+        tempoMode = try container.decodeIfPresent(TempoMode.self, forKey: .tempoMode) ?? .automatic
+        manualBPM = try container.decodeIfPresent(Double.self, forKey: .manualBPM) ?? 120
+        latencyOffset = try container.decodeIfPresent(Double.self, forKey: .latencyOffset) ?? 0
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case track, clockSource, volume, loops, tempoMode, manualBPM, latencyOffset
+    }
 }
 
 /// A saved show: canvas, layers and audio.

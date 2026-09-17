@@ -7,6 +7,7 @@ import SwiftUI
 /// while the model stores back-to-front draw order.
 struct LayersPanel: View {
     @ObservedObject var controller: ShowController
+    @ObservedObject private var thumbnails = ContentThumbnailStore.shared
     @State private var pickerItems: [PhotosPickerItem] = []
     @State private var isImporting = false
     @State private var isBrowsingGenerators = false
@@ -95,6 +96,8 @@ struct LayersPanel: View {
             }
             .buttonStyle(.plain)
 
+            thumbnail(for: layer)
+
             VStack(alignment: .leading, spacing: 2) {
                 Text(layer.name).lineLimit(1)
                 Text(subtitle(for: layer))
@@ -122,10 +125,40 @@ struct LayersPanel: View {
         .onTapGesture { controller.selectedLayerID = layer.id }
     }
 
+    /// A name and a blend mode do not tell you what is on the wall; a frame does.
+    @ViewBuilder
+    private func thumbnail(for layer: MappingLayer) -> some View {
+        let shape = RoundedRectangle(cornerRadius: 4)
+        Group {
+            if let image = thumbnails.image(for: layer.content,
+                                            projectID: controller.project.id) {
+                Image(decorative: image, scale: 1)
+                    .resizable()
+                    .aspectRatio(contentMode: .fill)
+            } else if case .solid = layer.content {
+                layer.appearance.tint.color
+            } else {
+                Color.black
+            }
+        }
+        .frame(width: 44, height: 25)
+        .clipShape(shape)
+        .overlay(shape.stroke(Color.primary.opacity(0.15)))
+        .opacity(layer.isVisible ? 1 : 0.4)
+        .accessibilityHidden(true)
+    }
+
     private func subtitle(for layer: MappingLayer) -> String {
         var parts = [layer.content.displayName]
+        if case .video(_, let playback) = layer.content, playback.rate != 1 {
+            parts.append(String(format: "%.2fx", playback.rate))
+        }
         if layer.appearance.blendMode != .normal { parts.append(layer.appearance.blendMode.displayName) }
-        if layer.transform.isWarped { parts.append("warped") }
+        if layer.transform.mesh.isSubdivided {
+            parts.append("\(layer.transform.mesh.columns)x\(layer.transform.mesh.rows)")
+        } else if layer.transform.isWarped {
+            parts.append("warped")
+        }
         return parts.joined(separator: " · ")
     }
 

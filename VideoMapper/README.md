@@ -11,6 +11,18 @@ dragging applies a true projective transform (a homography), so pulling one corn
 foreshortens the whole image the way a real projector does — which is what makes an
 image sit flat on an angled wall instead of looking like a skewed rectangle.
 
+**Correct what four corners cannot.** Four corners describe a flat surface exactly,
+and nothing else. For a curved wall, a column, a sagging cloth or panels that do not
+sit flush, raise the **Correction grid** in the inspector to 2x2 and up to 8x8: the
+layer gains control points in between, and each is dragged on the stage in Warp mode.
+Subdividing never moves a mapping you have already aligned — the points start exactly
+where the corner warp already puts them.
+
+**Swap content without rebuilding the mapping.** Aligning a surface is the slow part;
+what plays inside it is not. The inspector's **Content** section shows a preview of
+the layer and replaces it in place — a photo, a video, or a generated source — leaving
+the quad, the grid, the blend and the audio routing untouched.
+
 **Built-in source library.** Twelve abstract sources, generated on the GPU rather
 than played back from video files:
 
@@ -56,6 +68,7 @@ elements read far better on a wall than bright, busy ones.
 | --- | --- | --- |
 | Size / position / rotation | free | Pinch and twist on stage, or use the sliders |
 | Corner warp | free | Four pins; folded quads are rejected |
+| Correction grid | up to 8x8 cells | Extra points inside the layer, for surfaces that are not flat |
 | Intensity | 0–4x | Above 1 deliberately blows out highlights for dark surfaces |
 | Opacity | 0–100% | |
 | Colour + mix | any colour | Tints the layer, or paints a solid colour layer |
@@ -69,12 +82,23 @@ elements read far better on a wall than bright, busy ones.
 toggles. A locked layer ignores stage gestures, so a finished mapping cannot be
 nudged mid-set.
 
+**Run each layer at its own speed.** Every clip has its own playback speed, from
+frozen (a still frame, without importing a still) to 4x, and every generated source
+has its own rate. Two layers of the same clip at different speeds is a normal thing
+to want and costs nothing.
+
 **Sync to music.** Three clock sources:
 
 - **Track** — load an audio file; the visuals follow its playback position.
 - **Listen** — the microphone drives the show, so it locks to music from a PA
   system or anything else this app has no digital link to.
 - **Free run** — a plain timer, for programming in silence.
+
+Tempo is found automatically. The analyser estimates BPM from the audio and reports
+how much the estimate agrees with itself; while that confidence is low — a rubato
+piece, a quiet passage — the show falls back to the manual tempo rather than letting a
+bad guess drive it. Switch to **Manual** to pin a fixed grid, tap it in by hand, or
+press **Use detected** to freeze whatever the analyser found.
 
 Audio is analysed on device (FFT into bass/mid/treble bands, plus onset-based beat
 and tempo detection). Any band can be routed to any parameter — bass to intensity,

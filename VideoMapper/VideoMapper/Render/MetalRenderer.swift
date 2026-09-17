@@ -20,6 +20,8 @@ struct LayerUniforms {
     var params4: SIMD4<Float>
     /// paletteIndex, generatorDrive, generatorVariation, unused
     var params5: SIMD4<Float>
+    /// uvOriginX, uvOriginY, uvSizeX, uvSizeY — the mesh cell's slice of the layer
+    var params6: SIMD4<Float>
 }
 
 /// Immutable snapshot of everything needed to draw one frame.
@@ -39,7 +41,11 @@ struct RenderFrame {
 /// A layer after audio modulation has been folded into its stored values.
 struct ResolvedLayer {
     var id: UUID
+    /// The layer's outline. Kept for hit tests and overlays; drawing uses `cells`.
     var quad: Quad
+    /// Drawable patches. Exactly one for an un-subdivided layer, one per mesh cell
+    /// otherwise.
+    var cells: [MeshCell]
     var appearance: Appearance
     var content: LayerContent
     /// Smoothed audio value driving a generator, 0...1. Zero for media layers and
@@ -171,14 +177,19 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
                                                           isPlaying: frame.isPlaying)
             else { continue }
 
-            var uniforms = makeUniforms(for: layer, frame: frame)
             encoder.setRenderPipelineState(pipeline)
-            encoder.setVertexBytes(&uniforms, length: MemoryLayout<LayerUniforms>.stride, index: 0)
-            encoder.setFragmentBytes(&uniforms, length: MemoryLayout<LayerUniforms>.stride, index: 0)
             encoder.setFragmentTexture(source, index: 0)
             // Slot 1 must always be bound, even for layers with no overlay image.
             encoder.setFragmentTexture(textureStore.overlayTexture(for: layer) ?? source, index: 1)
-            encoder.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4)
+
+            // One draw per mesh cell. Only the homography and the uv slice differ, so
+            // the pipeline and textures are set once for the whole layer.
+            for cell in layer.cells {
+                var uniforms = makeUniforms(for: layer, cell: cell, frame: frame)
+                encoder.setVertexBytes(&uniforms, length: MemoryLayout<LayerUniforms>.stride, index: 0)
+                encoder.setFragmentBytes(&uniforms, length: MemoryLayout<LayerUniforms>.stride, index: 0)
+                encoder.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4)
+            }
         }
 
         encoder.endEncoding()
@@ -186,12 +197,13 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
         commandBuffer.commit()
     }
 
-    private func makeUniforms(for layer: ResolvedLayer, frame: RenderFrame) -> LayerUniforms {
+    private func makeUniforms(for layer: ResolvedLayer, cell: MeshCell,
+                              frame: RenderFrame) -> LayerUniforms {
         let appearance = layer.appearance
         let texture = appearance.texture
         let hasCustom = texture.pattern == .custom && textureStore.overlayTexture(for: layer) != nil
         return LayerUniforms(
-            homography: Homography.unitSquare(to: layer.quad),
+            homography: Homography.unitSquare(to: cell.quad),
             tint: appearance.tint.simd,
             params0: SIMD4(Float(appearance.intensity), Float(appearance.opacity),
                            Float(appearance.saturation), Float(appearance.contrast)),
@@ -202,7 +214,9 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
             params3: SIMD4(Float(texture.scrollX), Float(texture.scrollY),
                            Float(frame.canvasAspect), 0),
             params4: generatorParams(for: layer),
-            params5: paletteParams(for: layer))
+            params5: paletteParams(for: layer),
+            params6: SIMD4(Float(cell.uvOrigin.x), Float(cell.uvOrigin.y),
+                           Float(cell.uvSize.width), Float(cell.uvSize.height)))
     }
 
     private func generatorParams(for layer: ResolvedLayer) -> SIMD4<Float> {

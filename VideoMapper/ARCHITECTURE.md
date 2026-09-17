@@ -49,6 +49,45 @@ are applied after rotation, so the size slider keeps working normally on a layer
 has already been warped by hand — otherwise every warp would have to be redone after
 any size change.
 
+## The mesh is additive, not a replacement
+
+Four corners and a homography describe a flat surface exactly. Nothing they can do
+describes a curved one, so the correction grid adds points — and the question that
+decides the whole design is where an unwarped point sits.
+
+The answer is: on the quad's own projective map of its (u, v), not on a bilinear
+blend of the four corners. Those differ on any keystoned quad, and only the first has
+the property that matters: with every offset at zero, the mesh reproduces the
+homography *exactly*. Subdividing a surface someone spent twenty minutes aligning
+moves it by nothing at all. A bilinear base would shift the interior the moment the
+grid appeared, which would make the feature useless on the surfaces that need it most.
+
+Each cell is then its own quad with its own homography, drawn as its own quad. The
+uniform block carries a uv slice (`params6`) so the fragment stage still samples
+layer space rather than cell space — which is why feather, texture overlay and the
+generators all keep working across a subdivided layer without knowing it was
+subdivided. At 1 x 1 the slice is (0, 0, 1, 1) and the whole path collapses to what
+it was before.
+
+The cost is draw calls: one per cell, so 8 x 8 is 64 for that layer. Textures and
+pipeline state are set once per layer and only the uniforms change between cells, but
+the ceiling is deliberate.
+
+Folding is refused rather than clamped. A folded cell has a degenerate homography and
+the patch turns inside out or vanishes; `meshIsDrawable(movingPointAt:to:)` checks the
+up-to-four cells touching the dragged point and the drag is simply not applied.
+
+## Tempo is detected, and its confidence is the interesting part
+
+`BeatTracker` always produces a BPM. The useful signal is `tempoConfidence` — the
+spread of the detected inter-onset intervals about their median. A four-on-the-floor
+track settles near 1; a rubato piano piece stays near 0.
+
+Automatic mode adopts the detected tempo only above `AudioSettings.confidenceThreshold`
+and falls back to the authored value below it. That is not timidity: a beat grid that
+lurches is visibly worse than one that is slightly wrong but steady, and a show
+programmed in silence has to look the same when the music starts.
+
 ## Rendering
 
 One draw call per layer, blended in order, with no intermediate render target. Blend
@@ -227,3 +266,8 @@ layer — the mapping stays visible so the operator can see what is absent.
 - Beat detection is unreliable on sparse or heavily rubato music.
 - One canvas per show; there is no multi-projector edge-blend layout beyond the
   per-layer feather control.
+- The correction grid is a quad mesh with linear interpolation inside each cell. A
+  tight curve needs more cells rather than smoother interpolation; there is no spline
+  surface.
+- Tempo detection is onset-based and reports low confidence rather than trying harder
+  on music it cannot read.

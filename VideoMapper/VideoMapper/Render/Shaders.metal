@@ -13,6 +13,7 @@ struct LayerUniforms {
     float4 params3;        // scrollX, scrollY, canvasAspect, unused
     float4 params4;        // generatorIndex, genSpeed, genScale, genComplexity
     float4 params5;        // paletteIndex, genDrive, genVariation, unused
+    float4 params6;        // uvOriginX, uvOriginY, uvSizeX, uvSizeY (mesh cell slice)
 };
 
 struct VertexOut {
@@ -36,7 +37,10 @@ vertex VertexOut layer_vertex(uint vid [[vertex_id]],
     // clip.xy = (2x - w, w - 2y) so that after the divide we land on (2u-1, 1-2v).
     VertexOut out;
     out.position = float4(2.0 * p.x - p.z, p.z - 2.0 * p.y, 0.0, p.z);
-    out.uv = uv;
+    // The homography maps this *cell's* unit square onto the canvas, so the texture
+    // coordinate has to be lifted back into the whole layer's space. With one cell
+    // the slice is (0, 0, 1, 1) and this is the identity.
+    out.uv = u.params6.xy + uv * u.params6.zw;
     return out;
 }
 

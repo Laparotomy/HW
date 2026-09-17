@@ -128,6 +128,39 @@ final class ShowController: ObservableObject {
         }
     }
 
+    /// The tempo the show is actually running on.
+    ///
+    /// Detection produces a number continuously, but an unsure one is worse than no
+    /// number at all — it makes a beat-driven layer stutter. So automatic mode only
+    /// adopts the detected tempo once the tracker agrees with itself, and falls back
+    /// to the authored value until then. That keeps a show programmed in silence
+    /// looking the same when the music starts.
+    var effectiveBPM: Double {
+        guard project.audio.tempoMode == .automatic else { return project.audio.manualBPM }
+        let features = audio.features
+        guard features.bpm > 0,
+              features.tempoConfidence >= AudioSettings.confidenceThreshold
+        else { return project.audio.manualBPM }
+        return features.bpm
+    }
+
+    /// True when the detected tempo is the one in use, for the tempo readout.
+    var isFollowingDetectedTempo: Bool {
+        project.audio.tempoMode == .automatic
+            && audio.features.bpm > 0
+            && audio.features.tempoConfidence >= AudioSettings.confidenceThreshold
+    }
+
+    /// Copies the detected tempo into the manual value, so a set can be locked to
+    /// what the analyser found and then left alone.
+    func adoptDetectedTempo() {
+        let detected = audio.features.bpm
+        guard detected > 0 else { return }
+        project.audio.manualBPM = min(200, max(60, detected))
+        project.audio.tempoMode = .manual
+        saveNow()
+    }
+
     private var activeRouteIDs: Set<UUID> {
         Set(project.layers.flatMap { $0.modulation.map(\.id) })
     }
@@ -157,7 +190,7 @@ final class ShowController: ObservableObject {
         frame.selectedLayerID = selectedLayerID
 
         let features = audio.features
-        let fallbackBPM = project.audio.manualBPM
+        let fallbackBPM = effectiveBPM
         frame.layers = project.layers.filter(\.isVisible).map { layer in
             let offsets = modulation.offsets(for: layer, features: features,
                                              showTime: showTime, fallbackBPM: fallbackBPM)
@@ -309,6 +342,43 @@ final class ShowController: ObservableObject {
     func attachMedia(_ ref: MediaReference) {
         let layer = MappingLayer.make(from: ref, canvasAspect: project.canvasAspect)
         addLayer(layer)
+    }
+
+    /// Puts media into an existing layer, keeping its mapping.
+    ///
+    /// The whole point of a mapped surface is that aligning it was work. Swapping
+    /// what plays inside it must not touch the quad, the mesh, the blend or the
+    /// modulation — only the content and, if the layer still carries its old
+    /// content's name, the name.
+    func setContent(_ content: LayerContent, forLayer id: UUID) {
+        guard let index = project.index(of: id) else { return }
+        let previous = project.layers[index].content
+        if project.layers[index].name == previous.displayName {
+            project.layers[index].name = content.displayName
+        }
+        project.layers[index].content = content
+        // A colour layer is tinted white at full mix so the swatch shows; real
+        // content underneath that would come out washed to flat white.
+        if case .solid = previous, content.media != nil || content.generator != nil {
+            project.layers[index].appearance.tintAmount = 0
+        }
+        store.pruneMedia(for: project)
+        broadcastProject()
+    }
+
+    /// Media replacement, sized to nothing — the existing mapping is what matters.
+    func setMedia(_ ref: MediaReference, forLayer id: UUID) {
+        let content: LayerContent = ref.kind == .video
+            ? .video(ref, playback(ofLayer: id) ?? VideoPlayback())
+            : .image(ref)
+        setContent(content, forLayer: id)
+    }
+
+    /// Carries transport settings across a clip swap, so a layer set to half speed
+    /// stays at half speed when the clip inside it changes.
+    private func playback(ofLayer id: UUID) -> VideoPlayback? {
+        guard case .video(_, let playback) = project.layer(with: id)?.content else { return nil }
+        return playback
     }
 
     func setTrack(_ ref: MediaReference) {

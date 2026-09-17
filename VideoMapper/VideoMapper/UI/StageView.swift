@@ -53,6 +53,8 @@ struct StageView: View {
     /// original rather than compounding.
     @State private var gestureStartTransform: LayerTransform?
     @State private var activeCorner: Int?
+    /// Index into the mesh's control points while one is being dragged.
+    @State private var activeMeshPoint: Int?
     @State private var draggingLayerID: UUID?
     /// Pinch and rotation run simultaneously with the drag, so each keeps its own
     /// starting transform rather than fighting over one.
@@ -115,16 +117,63 @@ struct StageView: View {
             .allowsHitTesting(false)
 
             if controller.stageMode == .warp && !layer.isLocked {
-                ForEach(Array(points.enumerated()), id: \.offset) { index, position in
-                    Circle()
-                        .fill(activeCorner == index ? Color.accentColor : Color.white)
-                        .overlay(Circle().stroke(Color.black.opacity(0.6), lineWidth: 1))
-                        .frame(width: handleRadius * 2, height: handleRadius * 2)
-                        .position(position)
-                        .allowsHitTesting(false)
+                if layer.transform.mesh.isSubdivided {
+                    meshOverlay(layer: layer, size: size)
+                } else {
+                    ForEach(Array(points.enumerated()), id: \.offset) { index, position in
+                        handle(at: position, isActive: activeCorner == index, isCorner: true)
+                    }
                 }
             }
         }
+    }
+
+    /// Control points plus the cell edges between them, so the correction being
+    /// applied is visible rather than guessed at from the image alone.
+    @ViewBuilder
+    private func meshOverlay(layer: MappingLayer, size: CGSize) -> some View {
+        let mesh = layer.transform.mesh
+        let points = layer.transform.meshPoints().map { point(for: $0, in: size) }
+
+        Path { path in
+            for row in 0...mesh.rows {
+                for column in 0...mesh.columns {
+                    let index = mesh.index(column: column, row: row)
+                    guard points.indices.contains(index) else { continue }
+                    if column < mesh.columns, points.indices.contains(index + 1) {
+                        path.move(to: points[index])
+                        path.addLine(to: points[index + 1])
+                    }
+                    let below = index + mesh.pointsAcross
+                    if row < mesh.rows, points.indices.contains(below) {
+                        path.move(to: points[index])
+                        path.addLine(to: points[below])
+                    }
+                }
+            }
+        }
+        .stroke(Color.accentColor.opacity(0.45), lineWidth: 1)
+        .allowsHitTesting(false)
+
+        ForEach(Array(points.enumerated()), id: \.offset) { index, position in
+            let column = index % mesh.pointsAcross
+            let row = index / mesh.pointsAcross
+            let isCorner = (column == 0 || column == mesh.columns)
+                && (row == 0 || row == mesh.rows)
+            handle(at: position, isActive: activeMeshPoint == index, isCorner: isCorner)
+        }
+    }
+
+    /// Corners are drawn full size; interior points smaller, so the outline of the
+    /// surface stays readable through a dense grid.
+    private func handle(at position: CGPoint, isActive: Bool, isCorner: Bool) -> some View {
+        let radius = isCorner ? handleRadius : handleRadius * 0.62
+        return Circle()
+            .fill(isActive ? Color.accentColor : Color.white)
+            .overlay(Circle().stroke(Color.black.opacity(0.6), lineWidth: 1))
+            .frame(width: radius * 2, height: radius * 2)
+            .position(position)
+            .allowsHitTesting(false)
     }
 
     private func point(for normalized: CGPoint, in size: CGSize) -> CGPoint {
@@ -150,7 +199,13 @@ struct StageView: View {
 
                 controller.updateLayer(id: id) { layer in
                     guard !layer.isLocked else { return }
-                    if let corner = activeCorner {
+                    if let point = activeMeshPoint {
+                        // Same rule as a corner: refuse anything that folds a cell.
+                        guard start.meshIsDrawable(movingPointAt: point, to: location) else { return }
+                        var transform = start
+                        transform.setMeshPoint(point, to: location)
+                        layer.transform = transform
+                    } else if let corner = activeCorner {
                         var transform = start
                         transform.setCorner(corner, to: location)
                         // Refuse a drag that folds the quad; the homography would be
@@ -168,6 +223,7 @@ struct StageView: View {
             .onEnded { _ in
                 gestureStartTransform = nil
                 activeCorner = nil
+                activeMeshPoint = nil
                 draggingLayerID = nil
                 controller.saveNow()
             }
@@ -177,12 +233,26 @@ struct StageView: View {
     /// whichever layer is topmost under the finger.
     private func beginDrag(at viewPoint: CGPoint, normalized location: CGPoint, size: CGSize) {
         if controller.stageMode == .warp, let layer = controller.selectedLayer, !layer.isLocked {
-            let corners = layer.transform.quad().corners.map { point(for: $0, in: size) }
-            // Generous hit radius: fingertips are wider than the handles.
-            if let nearest = corners.enumerated()
+            let mesh = layer.transform.mesh
+            let handles = mesh.isSubdivided
+                ? layer.transform.meshPoints().map { point(for: $0, in: size) }
+                : layer.transform.quad().corners.map { point(for: $0, in: size) }
+            // Generous hit radius: fingertips are wider than the handles. A dense
+            // grid puts points close together, so the radius shrinks with the cell
+            // size rather than letting neighbours overlap into each other.
+            let spacing: CGFloat = mesh.isSubdivided
+                ? min(size.width / CGFloat(mesh.columns), size.height / CGFloat(mesh.rows)) * 0.45
+                : .greatestFiniteMagnitude
+            let radius = min(handleRadius * 2.2, max(handleRadius, spacing))
+
+            if let nearest = handles.enumerated()
                 .min(by: { $0.element.distance(to: viewPoint) < $1.element.distance(to: viewPoint) }),
-               nearest.element.distance(to: viewPoint) < handleRadius * 2.2 {
-                activeCorner = nearest.offset
+               nearest.element.distance(to: viewPoint) < radius {
+                if mesh.isSubdivided {
+                    activeMeshPoint = nearest.offset
+                } else {
+                    activeCorner = nearest.offset
+                }
                 draggingLayerID = layer.id
                 gestureStartTransform = layer.transform
                 return
@@ -197,6 +267,7 @@ struct StageView: View {
             draggingLayerID = hit.id
             gestureStartTransform = hit.transform
             activeCorner = nil
+            activeMeshPoint = nil
         }
     }
 

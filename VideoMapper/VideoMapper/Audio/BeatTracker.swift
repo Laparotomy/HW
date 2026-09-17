@@ -16,6 +16,13 @@ final class BeatTracker {
     private var intervals: [Double] = []
 
     private(set) var bpm: Double = 0
+    /// How tightly the detected onsets agree, 0...1.
+    ///
+    /// The estimate itself is always *a* number; this says whether it is worth
+    /// trusting. A four-on-the-floor track settles near 1, a rubato piano piece stays
+    /// near 0, and the difference is what lets the app follow the music automatically
+    /// without lurching whenever detection has a bad few seconds.
+    private(set) var tempoConfidence: Double = 0
     /// 0...1 position between the last beat and the next expected one.
     private(set) var phase: Double = 0
     private(set) var didBeat = false
@@ -25,6 +32,7 @@ final class BeatTracker {
         intervals.removeAll()
         lastBeatTime = -1
         bpm = 0
+        tempoConfidence = 0
         phase = 0
         didBeat = false
     }
@@ -80,6 +88,14 @@ final class BeatTracker {
         while estimate > 180 { estimate /= 2 }
         // Smooth so a single mis-detected onset does not lurch the tempo.
         bpm = bpm == 0 ? estimate : bpm * 0.8 + estimate * 0.2
+
+        // Spread of the intervals about their median, relative to the median itself.
+        // Scaled by 3 so that a 33% spread — sloppy but still recognisably a pulse —
+        // lands at zero confidence rather than somewhere ambiguous.
+        let deviation = intervals.reduce(0) { $0 + abs($1 - median) } / Double(intervals.count)
+        let spread = min(1, deviation / median * 3)
+        let measured = (1 - spread) * min(1, Double(intervals.count) / 8)
+        tempoConfidence = tempoConfidence * 0.7 + measured * 0.3
     }
 
     private func updatePhase(at time: Double) {

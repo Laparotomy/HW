@@ -60,22 +60,50 @@ struct AudioPanel: View {
             }
 
             Section("Tempo") {
+                Picker("Source", selection: Binding(
+                    get: { controller.project.audio.tempoMode },
+                    set: { controller.project.audio.tempoMode = $0 })) {
+                    ForEach(TempoMode.allCases) { Text($0.displayName).tag($0) }
+                }
+                .pickerStyle(.segmented)
+
                 HStack {
                     Text("Detected")
                     Spacer()
-                    Text(audio.features.bpm > 0 ? String(format: "%.0f BPM", audio.features.bpm) : "—")
+                    Text(detectedText)
                         .font(.body.monospacedDigit())
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(controller.isFollowingDetectedTempo ? .primary : .secondary)
                 }
+                // The estimate is always *a* number; the bar says whether it is worth
+                // following. Below the threshold automatic mode keeps using the manual
+                // value rather than letting a bad guess drive the show.
+                if audio.features.bpm > 0 {
+                    meter("Confidence", audio.features.tempoConfidence,
+                          controller.isFollowingDetectedTempo ? .green : .orange)
+                }
+
                 LabeledSlider(title: "Manual tempo", value: Binding(
                     get: { controller.project.audio.manualBPM },
                     set: { controller.project.audio.manualBPM = $0 }),
                     range: 60...200, format: { String(format: "%.0f BPM", $0) })
-                Button {
-                    audio.tapTempo()
-                } label: {
-                    Label("Tap tempo", systemImage: "hand.tap")
+
+                HStack {
+                    Button {
+                        audio.tapTempo()
+                    } label: {
+                        Label("Tap tempo", systemImage: "hand.tap")
+                    }
+                    Spacer()
+                    Button("Use detected") {
+                        controller.adoptDetectedTempo()
+                    }
+                    .disabled(audio.features.bpm <= 0)
                 }
+                .buttonStyle(.bordered)
+
+                Text(tempoExplanation)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
 
             Section("Levels") {
@@ -115,6 +143,22 @@ struct AudioPanel: View {
             Button("OK", role: .cancel) { importError = nil }
         } message: {
             Text(importError ?? "")
+        }
+    }
+
+    private var detectedText: String {
+        guard audio.features.bpm > 0 else { return "—" }
+        return String(format: "%.0f BPM", audio.features.bpm)
+    }
+
+    private var tempoExplanation: String {
+        switch controller.project.audio.tempoMode {
+        case .automatic:
+            return controller.isFollowingDetectedTempo
+                ? "Following the music. Beat-driven layers are on the detected tempo."
+                : "Listening. Until the estimate settles, the manual tempo is used."
+        case .manual:
+            return "Beat-driven layers run on the manual tempo, whatever the music does."
         }
     }
 
