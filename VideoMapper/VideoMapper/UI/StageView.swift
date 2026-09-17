@@ -48,6 +48,7 @@ struct MetalStageView: UIViewRepresentable {
 /// The editing surface: rendered output plus direct-manipulation handles.
 struct StageView: View {
     @ObservedObject var controller: ShowController
+    @ObservedObject private var thumbnails = ContentThumbnailStore.shared
 
     /// Transform captured when a gesture begins, so every update is applied to the
     /// original rather than compounding.
@@ -91,12 +92,34 @@ struct StageView: View {
                 Text("Rendering is unavailable on this device")
                     .foregroundStyle(.secondary)
             }
+            referenceUnderlay
             overlay(size: size)
         }
         .contentShape(Rectangle())
         .gesture(dragGesture(size: size))
         .simultaneousGesture(scaleGesture())
         .simultaneousGesture(rotateGesture())
+    }
+
+    /// The scanned surface, ghosted over the stage.
+    ///
+    /// Over rather than under: the renderer's output is opaque, and making it
+    /// transparent to slip a photo behind would change the one code path the
+    /// projector also runs. A ghost on top costs nothing and is only ever on screen
+    /// while editing.
+    @ViewBuilder
+    private var referenceUnderlay: some View {
+        if controller.referenceOpacity > 0,
+           let scan = controller.project.activeScan,
+           let image = thumbnails.referenceImage(for: scan, projectID: controller.project.id) {
+            Image(decorative: image, scale: 1)
+                .resizable()
+                .aspectRatio(contentMode: .fill)
+                .opacity(controller.referenceOpacity)
+                .blendMode(.screen)
+                .allowsHitTesting(false)
+                .clipped()
+        }
     }
 
     // MARK: - Handles

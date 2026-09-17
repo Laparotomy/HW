@@ -9,6 +9,7 @@ struct ContentView: View {
     @State private var panel: Panel = .layers
     @State private var isPerforming = false
     @State private var showsBrowser = false
+    @State private var stageSettings = false
 
     enum Panel: String, CaseIterable, Identifiable {
         case layers, look, audio, sync
@@ -54,6 +55,14 @@ struct ContentView: View {
                 }
                 ToolbarItem(placement: .topBarTrailing) {
                     Button {
+                        stageSettings = true
+                    } label: {
+                        Image(systemName: "aspectratio")
+                    }
+                    .accessibilityLabel("Stage settings")
+                }
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button {
                         withAnimation { isPerforming = true }
                     } label: {
                         Image(systemName: "play.rectangle")
@@ -64,6 +73,9 @@ struct ContentView: View {
         }
         .sheet(isPresented: $showsBrowser) {
             ShowsBrowser(controller: controller)
+        }
+        .sheet(isPresented: $stageSettings) {
+            StageSettingsView(controller: controller)
         }
         .statusBarHidden(isPerforming)
     }

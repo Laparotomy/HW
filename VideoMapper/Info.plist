@@ -75,6 +75,8 @@
 	</array>
 	<key>NSPhotoLibraryUsageDescription</key>
 	<string>Video Mapper imports the videos and photos you map onto surfaces.</string>
+	<key>NSCameraUsageDescription</key>
+	<string>Scanning a surface photographs it from where the projector stands, so you can line your mapping up against the real wall. On an iPhone with a LiDAR scanner the shape of the surface is measured too. Nothing leaves the device.</string>
 	<key>NSMicrophoneUsageDescription</key>
 	<string>Listen mode analyses music playing nearby so your visuals follow its beat. Audio is analysed on device and never recorded or sent anywhere.</string>
 	<key>NSLocalNetworkUsageDescription</key>

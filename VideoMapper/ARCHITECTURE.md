@@ -77,6 +77,60 @@ Folding is refused rather than clamped. A folded cell has a degenerate homograph
 the patch turns inside out or vanishes; `meshIsDrawable(movingPointAt:to:)` checks the
 up-to-four cells touching the dragged point and the drag is simply not applied.
 
+## A projector cannot see its own distortion
+
+This is the fact the whole scanning feature is built around, and it is worth stating
+before the code that follows it: **a projector's image is never distorted from the
+projector's own position.** Whatever shape the surface is, each pixel's light goes
+where that pixel points. Distortion is something other viewpoints see — light that
+would have landed at one place on a flat wall lands nearer or further on a curved
+one, and from the side that difference reads as the image sliding across the object.
+
+Three consequences shape the design:
+
+1. **A photo from the projector's position is the most useful thing a phone can
+   capture.** It shows the surface exactly as the projector frames it, so aligning a
+   layer against that photo aligns it against the wall. This needs no depth sensor,
+   no calibration and no maths, and it is what the reference underlay is.
+2. **Correction only means anything relative to a chosen viewpoint.** `AudienceOffset`
+   is therefore not optional garnish; without it there is nothing to solve, and the
+   solver refuses rather than returning zeros.
+3. **Only the audience's *position* matters, not their orientation or field of view.**
+   Making a lit point line up for a viewer means putting it on the right ray *from
+   that viewer*, and which way their head is turned does not change which ray a point
+   is on. That collapses what looked like a second camera calibration into three
+   numbers.
+
+### The solve
+
+`ScanSolver` fits a reference plane to the surface under the layer, treats the
+authored mapping as describing where content should sit on that plane, and moves each
+control point so the light actually reaching the real surface lands on the audience's
+line of sight to the plane point. Newton's method, 2x2 numerical Jacobian, six steps,
+one depth lookup each.
+
+The plane fit is worth a note. For a pinhole camera, a plane makes *inverse axial
+depth* an exactly affine function of the tangent coordinates `x/-z` and `y/-z`, so
+fitting `a*x + b*y + c` is a plane fit outright — no eigen decomposition and no
+degenerate orientations. Fitting against the components of a *unit* ray instead looks
+almost identical and is wrong: the third component is a square root of the other two,
+so a flat wall comes back slightly curved at the edges of the frame. That mistake was
+made and caught here by the test that a flat wall must produce no correction at all,
+which is the property the whole feature stands on.
+
+### What it is not
+
+It is not projector calibration. The projector's pose is assumed to be wherever the
+phone was held, and its frustum comes from a throw ratio read off the manual. Both
+carry error, and both express it as a whole-image shift or scale — which is what the
+four corner handles were always for. The curvature is the part corners cannot
+express, and that is the part this recovers.
+
+Depth needs a LiDAR scanner, which means a Pro iPhone. `SurfaceScanner.Capability`
+reports what the hardware can actually do and the UI says it plainly, because an app
+that quietly produced a flat warp on a phone that cannot measure would look broken
+rather than limited.
+
 ## Tempo is detected, and its confidence is the interesting part
 
 `BeatTracker` always produces a BPM. The useful signal is `tempoConfidence` — the
@@ -271,3 +325,8 @@ layer — the mapping stays visible so the operator can see what is absent.
   surface.
 - Tempo detection is onset-based and reports low confidence rather than trying harder
   on music it cannot read.
+- A scan is a single capture from one position, not a walk-around reconstruction. It
+  describes the surface as the projector sees it, which is all the warp needs, and
+  nothing about the sides of an object.
+- Surface depth is stored as a 65 x 49 grid rather than a mesh. Fine relative to any
+  warp grid, coarse relative to a real scan.

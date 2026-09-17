@@ -58,6 +58,10 @@ struct AudioSettings: Codable, Equatable {
 
     init() {}
 
+    init(name: String) {
+        self.name = name
+    }
+
     /// Decoded field by field with defaults, so a show saved before `tempoMode`
     /// existed still opens instead of failing to decode.
     init(from decoder: Decoder) throws {
@@ -86,8 +90,46 @@ struct MappingProject: Codable, Equatable, Identifiable {
     var layers: [MappingLayer] = []
     var audio: AudioSettings = AudioSettings()
     var background: RGBAColor = .black
+    /// Surfaces captured with the camera, used as a reference underlay and, where
+    /// the device measured depth, as the source of a curvature warp.
+    var scans: [SurfaceScan] = []
+    /// Scan shown under the stage while editing, if any.
+    var activeScanID: UUID?
+    /// How the projector throws its image. Needed to turn a scan into a warp.
+    var optics: ProjectorOptics = ProjectorOptics()
+    /// Where the audience stands relative to the projector.
+    var audience: AudienceOffset = AudienceOffset()
     var createdAt: Date = Date()
     var modifiedAt: Date = Date()
+
+    init() {}
+
+    /// Decoded field by field with defaults, so every show saved by an earlier
+    /// version still opens. This struct has gained fields three times now; a
+    /// synthesised decoder would have thrown away the user's work each time.
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decodeIfPresent(UUID.self, forKey: .id) ?? UUID()
+        name = try container.decodeIfPresent(String.self, forKey: .name) ?? "Untitled Show"
+        canvasSize = try container.decodeIfPresent(CGSize.self, forKey: .canvasSize)
+            ?? CGSize(width: 1920, height: 1080)
+        layers = try container.decodeIfPresent([MappingLayer].self, forKey: .layers) ?? []
+        audio = try container.decodeIfPresent(AudioSettings.self, forKey: .audio) ?? AudioSettings()
+        background = try container.decodeIfPresent(RGBAColor.self, forKey: .background) ?? .black
+        scans = try container.decodeIfPresent([SurfaceScan].self, forKey: .scans) ?? []
+        activeScanID = try container.decodeIfPresent(UUID.self, forKey: .activeScanID)
+        optics = try container.decodeIfPresent(ProjectorOptics.self, forKey: .optics)
+            ?? ProjectorOptics()
+        audience = try container.decodeIfPresent(AudienceOffset.self, forKey: .audience)
+            ?? AudienceOffset()
+        createdAt = try container.decodeIfPresent(Date.self, forKey: .createdAt) ?? Date()
+        modifiedAt = try container.decodeIfPresent(Date.self, forKey: .modifiedAt) ?? Date()
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id, name, canvasSize, layers, audio, background
+        case scans, activeScanID, optics, audience, createdAt, modifiedAt
+    }
 
     var canvasAspect: Double {
         canvasSize.height > 0 ? Double(canvasSize.width / canvasSize.height) : 16.0 / 9.0
@@ -106,7 +148,12 @@ struct MappingProject: Codable, Equatable, Identifiable {
             if let tex = layer.appearance.texture.image { names.insert(tex.filename) }
         }
         if let track = audio.track { names.insert(track.filename) }
+        for scan in scans { names.insert(scan.imageFilename) }
         return names
+    }
+
+    var activeScan: SurfaceScan? {
+        activeScanID.flatMap { id in scans.first { $0.id == id } }
     }
 
     static var demo: MappingProject {

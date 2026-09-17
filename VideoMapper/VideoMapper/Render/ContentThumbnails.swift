@@ -16,6 +16,8 @@ final class ContentThumbnailStore: ObservableObject {
     /// Wide enough to recognise a clip, small enough that a list of them costs
     /// nothing to keep resident.
     private static let maximumDimension = 240
+    /// A reference photo is looked at, not glanced at, so it gets a real size.
+    private static let referenceDimension = 1024
 
     /// Keyed by content signature rather than layer id, so duplicating a layer or
     /// reusing a clip does not decode it twice.
@@ -65,17 +67,30 @@ final class ContentThumbnailStore: ObservableObject {
         }
     }
 
+    /// A scan's reference photo, at a size worth looking at rather than a thumbnail.
+    ///
+    /// Same lazy contract as `image(for:projectID:)`: nil now, a redraw when it
+    /// lands.
+    func referenceImage(for scan: SurfaceScan, projectID: UUID) -> CGImage? {
+        let key = "scan:\(scan.imageFilename)"
+        if let ready = images[key] { return ready }
+        let ref = MediaReference(kind: .image, filename: scan.imageFilename,
+                                 displayName: scan.name, pixelSize: .zero)
+        load(ref: ref, key: key, projectID: projectID, maximum: Self.referenceDimension)
+        return nil
+    }
+
     /// Drops previews for media the project no longer references.
     func prune(keeping signatures: Set<String>) {
         images = images.filter { signatures.contains($0.key) }
     }
 
-    private func load(ref: MediaReference, key: String, projectID: UUID) {
+    private func load(ref: MediaReference, key: String, projectID: UUID,
+                      maximum: Int = ContentThumbnailStore.maximumDimension) {
         guard !inFlight.contains(key) else { return }
         inFlight.insert(key)
         let url = ProjectStore.shared.mediaURL(for: ref, projectID: projectID)
         let kind = ref.kind
-        let maximum = Self.maximumDimension
 
         Task.detached(priority: .utility) {
             let image = kind == .video

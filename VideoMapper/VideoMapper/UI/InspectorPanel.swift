@@ -10,6 +10,7 @@ struct InspectorPanel: View {
     @State private var isPickingContent = false
     @State private var isBrowsingSources = false
     @State private var contentError: String?
+    @State private var scanMessage: String?
 
     var body: some View {
         Group {
@@ -198,6 +199,56 @@ struct InspectorPanel: View {
         }
 
         meshSection(layer)
+        scanSection(layer)
+    }
+
+    // MARK: - Scan
+
+    /// Bending a layer around a scanned surface.
+    ///
+    /// Only offered when there is a measured scan to bend to. A photo-only capture
+    /// is genuinely useful — it is the thing under the stage you line up against —
+    /// but it holds no shape, and offering a button that could only ever fail would
+    /// be worse than not offering one.
+    @ViewBuilder
+    private func scanSection(_ layer: MappingLayer) -> some View {
+        if let scan = controller.project.activeScan, scan.hasDepth {
+            Section("Scanned surface") {
+                Button {
+                    applyScan(scan, to: layer)
+                } label: {
+                    Label("Bend this layer to the surface", systemImage: "cube.transparent")
+                }
+
+                Text("Uses the throw ratio and the audience position from Stage "
+                     + "settings. Get those right first — they decide how much of "
+                     + "the bend is real and how much is guesswork.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+
+                if let scanMessage {
+                    Text(scanMessage)
+                        .font(.caption)
+                        .foregroundStyle(.orange)
+                }
+
+                if layer.transform.mesh.isWarped {
+                    Button("Flatten the grid again") {
+                        controller.updateLayer(id: layer.id) { $0.transform.mesh.reset() }
+                        controller.saveNow()
+                        scanMessage = nil
+                    }
+                }
+            }
+        }
+    }
+
+    private func applyScan(_ scan: SurfaceScan, to layer: MappingLayer) {
+        if let failure = controller.applyScan(scan, toLayer: layer.id) {
+            scanMessage = failure.message
+        } else {
+            scanMessage = nil
+        }
     }
 
     // MARK: - Mesh

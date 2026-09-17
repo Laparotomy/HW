@@ -18,6 +18,23 @@ layer gains control points in between, and each is dragged on the stage in Warp 
 Subdividing never moves a mapping you have already aligned — the points start exactly
 where the corner warp already puts them.
 
+**Scan the surface you are projecting onto.** Stand where the projector is, aim the
+phone the way it is aimed, and capture. The photo goes under the stage at an
+adjustable strength, so you align layers against the actual wall instead of from
+memory. That part works on every iPhone.
+
+On an iPhone with a **LiDAR scanner** the shape of the surface is measured as well,
+and a layer can be bent to follow it: tell the app the projector's throw ratio and
+where the audience stands, and **Design → Bend this layer to the surface** curves the
+correction grid so the content sits on a column or a curved wall the way it would sit
+on a flat one. A flat wall produces no change at all, by construction — see
+[ARCHITECTURE.md](ARCHITECTURE.md) for why, and for what this is not.
+
+**Set the canvas to the projector's frame.** The toolbar's aspect-ratio button opens
+the stage settings: 16:9, 16:10, 5:4, square, portrait, or any size you type in. Layer
+positions are normalized, so changing the canvas keeps the mapping and only changes
+the frame around it.
+
 **Swap content without rebuilding the mapping.** Aligning a surface is the slow part;
 what plays inside it is not. The inspector's **Content** section shows a preview of
 the layer and replaces it in place — a photo, a video, or a generated source — leaving
@@ -161,11 +178,28 @@ Use a physical device for real work: multi-device sync needs the local network,
 Listen mode needs the microphone, and only a projector shows whether a mapping
 actually lands on the surface. The simulator runs the renderer and the tests.
 
+### Scanning, honestly
+
+| | Any iPhone ARKit runs on | iPhone with LiDAR |
+| --- | --- | --- |
+| Reference photo under the stage | yes | yes |
+| Surface shape measured | no | yes |
+| Bend a layer to the surface | no | yes |
+
+LiDAR is on the Pro and Pro Max models from the iPhone 12 onward. Without it the app
+says so rather than producing a warp with nothing behind it.
+
+The bend is a good starting point, not a calibrated solution. It assumes the phone was
+where the projector's lens is, and takes the projector's frustum from a throw ratio
+typed in by hand. Errors in either show up as the whole image being slightly shifted
+or scaled, which the four corner handles fix in seconds; the curvature, which corners
+cannot express, is what the scan recovers.
+
 ### Permissions
 
 On first use the app asks for the photo library (importing media), the microphone
-(Listen mode only), and the local network (device sync only). Denying any of them
-leaves the rest of the app working.
+(Listen mode only), the camera (scanning only), and the local network (device sync
+only). Denying any of them leaves the rest of the app working.
 
 ## Connecting a projector
 
@@ -217,6 +251,7 @@ VideoMapper/
   App/      ShowController — owns the project, clock, audio and peer link
   Model/    Project, layers, transforms, homography maths, persistence
   Render/   Metal renderer, shaders, generator library, texture sources
+  Scan/     ARKit capture of a surface's photograph and depth
   Audio/    Playback, FFT analysis, beat tracking, modulation routing
   Sync/     Multipeer transport, clock estimation, message types
   UI/       SwiftUI screens
@@ -227,13 +262,17 @@ See [ARCHITECTURE.md](ARCHITECTURE.md) for how the pieces fit together and why.
 
 ## Status
 
-Builds clean and all 54 unit tests pass on CI (`.github/workflows/ios.yml`, Xcode on
+Builds clean and all 126 unit tests pass on CI (`.github/workflows/ios.yml`, Xcode on
 a macOS runner), which also launches the app in a simulator to catch crashes that
 compile fine. Every push uploads an unsigned `.ipa` artifact.
 
 Verified on device: the app builds, installs and runs on an iPhone.
 
 Still unverified on hardware: how each generator actually looks projected, media
-capture, microphone analysis, projector output and multi-device sync. A green build
+capture, microphone analysis, projector output, multi-device sync, and every part of
+surface scanning — ARKit does not run on a simulator, so the camera path has only
+ever been compiled, never executed. The scan maths is exercised against synthetic
+surfaces whose right answer is known, which is a different and weaker claim than
+having pointed a phone at a wall. A green build
 says the code compiles and its maths is right, not that the show looks correct on a
 wall.

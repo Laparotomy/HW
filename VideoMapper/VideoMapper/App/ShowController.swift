@@ -279,6 +279,87 @@ final class ShowController: ObservableObject {
         broadcastProject()
     }
 
+    // MARK: - Scans
+
+    /// How strongly the reference photo is ghosted over the stage while editing.
+    ///
+    /// Not stored in the project: it is a property of how you are working right now,
+    /// not of the show, and a follower device has no reason to inherit it.
+    @Published var referenceOpacity: Double = 0
+
+
+    /// Stores a capture in the project and makes it the reference under the stage.
+    func addScan(_ capture: SurfaceScanner.Capture) throws {
+        let filename = try store.writeMedia(capture.imageData, extension: "jpg",
+                                            projectID: project.id)
+        let index = project.scans.count + 1
+        let scan = SurfaceScan(name: "Surface \(index)",
+                               imageFilename: filename,
+                               camera: capture.camera,
+                               depth: capture.depth)
+        project.scans.append(scan)
+        project.activeScanID = scan.id
+        saveNow()
+    }
+
+    func deleteScan(id: UUID) {
+        project.scans.removeAll { $0.id == id }
+        if project.activeScanID == id { project.activeScanID = project.scans.last?.id }
+        store.pruneMedia(for: project)
+        saveNow()
+    }
+
+    /// Bends a layer's correction grid to follow the scanned surface.
+    ///
+    /// The grid is raised to a usable density first if it is still a plain quad: a
+    /// four-corner layer has nowhere to put curvature, and silently doing nothing
+    /// would look like the scan had failed.
+    func applyScan(_ scan: SurfaceScan, toLayer id: UUID) -> ScanSolver.Failure? {
+        guard let index = project.index(of: id) else { return .surfaceNotVisible }
+
+        var transform = project.layers[index].transform
+        if !transform.mesh.isSubdivided {
+            transform.setMeshDivisions(columns: 4, rows: 4)
+        }
+
+        let result = ScanSolver.meshOffsets(scan: scan,
+                                            optics: project.optics,
+                                            audience: project.audience,
+                                            transform: transform,
+                                            canvasAspect: project.canvasAspect)
+        switch result {
+        case .failure(let failure):
+            return failure
+        case .success(let offsets):
+            // Added to what is already there, not substituted for it. The solver
+            // measured how much further each point has to move from where it sits
+            // now, so any hand alignment done first survives the bend.
+            for (offsetIndex, offset) in offsets.enumerated() {
+                let existing = transform.mesh.offsets.indices.contains(offsetIndex)
+                    ? transform.mesh.offsets[offsetIndex] : .zero
+                transform.mesh.setOffset(CGPoint(x: existing.x + offset.x,
+                                                 y: existing.y + offset.y),
+                                         at: offsetIndex)
+            }
+            project.layers[index].transform = transform
+            saveNow()
+            broadcastProject()
+            return nil
+        }
+    }
+
+    /// Changes the canvas the layers live inside.
+    ///
+    /// Layer positions are normalized, so they stay where they are relative to the
+    /// frame; a wider canvas makes them wider along with it. That is the behaviour
+    /// you want when swapping to a projector with a different native mode — the
+    /// mapping is preserved and only the frame around it changes.
+    func setCanvasSize(_ size: CGSize) {
+        guard size.width > 0, size.height > 0 else { return }
+        project.canvasSize = size
+        broadcastProject()
+    }
+
     /// Adds a generator layer from the library, filling the canvas.
     func addGeneratorLayer(_ kind: GeneratorKind) {
         addLayer(MappingLayer.make(generator: kind))

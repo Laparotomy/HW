@@ -95,6 +95,16 @@ final class ProjectStore {
                               pixelSize: pixelSize, duration: duration)
     }
 
+    /// Writes bytes straight into the media folder, for content the app produced
+    /// itself rather than imported — a scan's reference photo has no source file to
+    /// copy from.
+    func writeMedia(_ data: Data, extension ext: String, projectID: UUID) throws -> String {
+        try prepareFolders(for: projectID)
+        let filename = "\(UUID().uuidString).\(ext)"
+        try data.write(to: mediaFolder(for: projectID).appendingPathComponent(filename))
+        return filename
+    }
+
     /// Removes media files no layer references any more.
     func pruneMedia(for project: MappingProject) {
         let keep = project.referencedMedia
