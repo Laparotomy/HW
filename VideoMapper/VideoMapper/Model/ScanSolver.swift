@@ -34,7 +34,7 @@ enum ScanSolver {
 
     /// Why a scan could not be turned into a warp. Each of these is something the
     /// operator can act on, so none of them is reported as a generic failure.
-    enum Failure: Equatable {
+    enum Failure: Error, Equatable {
         case noDepth
         case audienceAtProjector
         case surfaceNotVisible
