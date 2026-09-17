@@ -318,29 +318,20 @@ final class ShowController: ObservableObject {
         guard let index = project.index(of: id) else { return .surfaceNotVisible }
 
         var transform = project.layers[index].transform
-        if !transform.mesh.isSubdivided {
-            transform.setMeshDivisions(columns: 4, rows: 4)
-        }
+        transform.prepareMeshForCorrection()
 
+        // Solved against the hand-authored mapping, never against a previous bend,
+        // so bending twice gives the same answer as bending once.
         let result = ScanSolver.meshOffsets(scan: scan,
                                             optics: project.optics,
                                             audience: project.audience,
-                                            transform: transform,
+                                            transform: transform.handAuthored,
                                             canvasAspect: project.canvasAspect)
         switch result {
         case .failure(let failure):
             return failure
         case .success(let offsets):
-            // Added to what is already there, not substituted for it. The solver
-            // measured how much further each point has to move from where it sits
-            // now, so any hand alignment done first survives the bend.
-            for (offsetIndex, offset) in offsets.enumerated() {
-                let existing = transform.mesh.offsets.indices.contains(offsetIndex)
-                    ? transform.mesh.offsets[offsetIndex] : .zero
-                transform.mesh.setOffset(CGPoint(x: existing.x + offset.x,
-                                                 y: existing.y + offset.y),
-                                         at: offsetIndex)
-            }
+            transform.setScanCorrection(offsets)
             project.layers[index].transform = transform
             saveNow()
             broadcastProject()
@@ -433,16 +424,7 @@ final class ShowController: ObservableObject {
     /// content's name, the name.
     func setContent(_ content: LayerContent, forLayer id: UUID) {
         guard let index = project.index(of: id) else { return }
-        let previous = project.layers[index].content
-        if project.layers[index].name == previous.displayName {
-            project.layers[index].name = content.displayName
-        }
-        project.layers[index].content = content
-        // A colour layer is tinted white at full mix so the swatch shows; real
-        // content underneath that would come out washed to flat white.
-        if case .solid = previous, content.media != nil || content.generator != nil {
-            project.layers[index].appearance.tintAmount = 0
-        }
+        project.layers[index] = project.layers[index].replacingContent(with: content)
         store.pruneMedia(for: project)
         broadcastProject()
     }

@@ -198,6 +198,146 @@ final class MeshWarpEditingTests: XCTestCase {
     }
 }
 
+/// The hand-dragged correction and the scan-derived one are kept in separate arrays.
+/// They answer to different owners: one is what the operator dragged and must never
+/// be recomputed, the other is derived and must be replaced wholesale by each new
+/// solve. Summing them into one array is what made bending twice double the bend.
+final class MeshCorrectionSeparationTests: XCTestCase {
+
+    func testAFreshMeshHasNeitherKindOfCorrection() {
+        let mesh = MeshWarp(columns: 2, rows: 2)
+        XCTAssertFalse(mesh.isWarped)
+        XCTAssertFalse(mesh.hasScanCorrection)
+        XCTAssertEqual(mesh.scanOffsets.count, mesh.pointCount)
+    }
+
+    func testTheDrawnOffsetIsTheSumOfBoth() {
+        var mesh = MeshWarp(columns: 2, rows: 2)
+        mesh.setOffset(CGPoint(x: 0.1, y: 0), at: 4)
+        var scan = [CGPoint](repeating: .zero, count: mesh.pointCount)
+        scan[4] = CGPoint(x: 0, y: -0.05)
+        mesh.setScanOffsets(scan)
+
+        XCTAssertEqual(mesh.offset(at: 4), CGPoint(x: 0.1, y: 0))
+        XCTAssertEqual(mesh.effectiveOffset(at: 4), CGPoint(x: 0.1, y: -0.05))
+        XCTAssertTrue(mesh.isWarped)
+        XCTAssertTrue(mesh.hasScanCorrection)
+    }
+
+    func testSettingTheScanCorrectionReplacesTheWholeField() {
+        var mesh = MeshWarp(columns: 2, rows: 2)
+        mesh.setScanOffsets([CGPoint](repeating: CGPoint(x: 0.05, y: 0.05),
+                                      count: mesh.pointCount))
+        mesh.setScanOffsets([CGPoint](repeating: CGPoint(x: 0.01, y: 0),
+                                      count: mesh.pointCount))
+        XCTAssertTrue(mesh.scanOffsets.allSatisfy { $0 == CGPoint(x: 0.01, y: 0) })
+    }
+
+    func testAShortOrLongScanFieldIsSizedToTheGrid() {
+        var mesh = MeshWarp(columns: 2, rows: 2)
+        mesh.setScanOffsets([CGPoint(x: 0.1, y: 0.1)])
+        XCTAssertEqual(mesh.scanOffsets.count, 9)
+        XCTAssertEqual(mesh.scanOffsets[8], .zero)
+
+        mesh.setScanOffsets([CGPoint](repeating: CGPoint(x: 0.2, y: 0), count: 99))
+        XCTAssertEqual(mesh.scanOffsets.count, 9)
+    }
+
+    func testClearingTheScanCorrectionKeepsTheHandOne() {
+        var mesh = MeshWarp(columns: 2, rows: 2)
+        mesh.setOffset(CGPoint(x: 0.1, y: 0), at: 4)
+        mesh.setScanOffsets([CGPoint](repeating: CGPoint(x: 0.03, y: 0), count: 9))
+
+        mesh.clearScanCorrection()
+        XCTAssertFalse(mesh.hasScanCorrection)
+        XCTAssertTrue(mesh.isWarped)
+        XCTAssertEqual(mesh.offset(at: 4), CGPoint(x: 0.1, y: 0))
+    }
+
+    func testResetClearsBoth() {
+        var mesh = MeshWarp(columns: 2, rows: 2)
+        mesh.setOffset(CGPoint(x: 0.1, y: 0), at: 4)
+        mesh.setScanOffsets([CGPoint](repeating: CGPoint(x: 0.03, y: 0), count: 9))
+        mesh.reset()
+        XCTAssertFalse(mesh.isWarped)
+        XCTAssertFalse(mesh.hasScanCorrection)
+    }
+
+    /// Resizing has to carry both fields, or changing the grid density would silently
+    /// throw away whichever one it forgot.
+    func testResizingCarriesBothFields() {
+        var mesh = MeshWarp(columns: 2, rows: 2)
+        mesh.setOffset(CGPoint(x: 0.1, y: -0.05), column: 1, row: 1)
+        var scan = [CGPoint](repeating: .zero, count: mesh.pointCount)
+        scan[mesh.index(column: 1, row: 1)] = CGPoint(x: -0.02, y: 0.04)
+        mesh.setScanOffsets(scan)
+
+        let bigger = mesh.resized(columns: 4, rows: 4)
+        let centre = bigger.index(column: 2, row: 2)
+        XCTAssertEqual(bigger.offset(at: centre).x, 0.1, accuracy: 1e-12)
+        XCTAssertEqual(bigger.offset(at: centre).y, -0.05, accuracy: 1e-12)
+        XCTAssertEqual(bigger.scanOffsets[centre].x, -0.02, accuracy: 1e-12)
+        XCTAssertEqual(bigger.scanOffsets[centre].y, 0.04, accuracy: 1e-12)
+    }
+
+    /// Dragging a handle on a bent layer must put it under the finger, and must write
+    /// only to the hand field.
+    func testDraggingAHandleOnABentLayerMovesOnlyTheHandField() {
+        var transform = LayerTransform()
+        transform.setMeshDivisions(columns: 2, rows: 2)
+        var scan = [CGPoint](repeating: .zero, count: transform.mesh.pointCount)
+        scan[4] = CGPoint(x: 0.03, y: -0.02)
+        transform.setScanCorrection(scan)
+
+        let target = CGPoint(x: 0.55, y: 0.47)
+        transform.setMeshPoint(4, to: target)
+
+        let landed = transform.meshPoints()[4]
+        XCTAssertEqual(landed.x, target.x, accuracy: 1e-9)
+        XCTAssertEqual(landed.y, target.y, accuracy: 1e-9)
+        XCTAssertEqual(transform.mesh.scanOffsets[4], CGPoint(x: 0.03, y: -0.02))
+    }
+
+    func testHandAuthoredStripsOnlyTheBend() {
+        var transform = LayerTransform()
+        transform.setMeshDivisions(columns: 2, rows: 2)
+        transform.setMeshPoint(4, to: CGPoint(x: 0.55, y: 0.45))
+        let handOnly = transform.meshPoints()
+
+        var scan = [CGPoint](repeating: .zero, count: transform.mesh.pointCount)
+        scan[4] = CGPoint(x: 0.03, y: -0.02)
+        transform.setScanCorrection(scan)
+
+        XCTAssertNotEqual(transform.meshPoints(), handOnly)
+        XCTAssertEqual(transform.handAuthored.meshPoints(), handOnly)
+    }
+
+    func testBothFieldsRoundTripThroughCodable() throws {
+        var transform = LayerTransform()
+        transform.setMeshDivisions(columns: 2, rows: 2)
+        transform.setMeshPoint(4, to: CGPoint(x: 0.55, y: 0.45))
+        transform.setScanCorrection(
+            [CGPoint](repeating: CGPoint(x: 0.01, y: 0.02), count: transform.mesh.pointCount))
+
+        let data = try JSONEncoder().encode(transform)
+        let decoded = try JSONDecoder().decode(LayerTransform.self, from: data)
+        XCTAssertEqual(decoded, transform)
+        XCTAssertTrue(decoded.mesh.hasScanCorrection)
+    }
+
+    /// A mesh saved before the scan field existed still has to open.
+    func testAMeshSavedWithoutAScanFieldStillDecodes() throws {
+        let json = """
+        {"columns": 2, "rows": 2,
+         "offsets": [[0,0],[0,0],[0,0],[0,0],[0.1,0],[0,0],[0,0],[0,0],[0,0]]}
+        """
+        let mesh = try JSONDecoder().decode(MeshWarp.self, from: Data(json.utf8))
+        XCTAssertEqual(mesh.scanOffsets.count, 9)
+        XCTAssertFalse(mesh.hasScanCorrection)
+        XCTAssertEqual(mesh.offset(at: 4).x, 0.1, accuracy: 1e-12)
+    }
+}
+
 final class MeshWarpPersistenceTests: XCTestCase {
 
     func testAMeshRoundTripsThroughCodable() throws {

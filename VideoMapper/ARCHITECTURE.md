@@ -73,6 +73,15 @@ The cost is draw calls: one per cell, so 8 x 8 is 64 for that layer. Textures an
 pipeline state are set once per layer and only the uniforms change between cells, but
 the ceiling is deliberate.
 
+The correction is stored as *two* fields, not one. Hand-dragged offsets and
+scan-derived offsets answer to different owners: the first is what the operator
+dragged and must never be recomputed, the second is derived and has to be replaced
+wholesale by each new solve. They were one array at first, and bending a layer twice
+doubled the bend — an integration test caught it, and the separation is the fix. A
+new solve measures from `handAuthored` (the mapping with the bend stripped), so
+applying the same scan twice gives exactly what applying it once gives, and removing
+a bend leaves the hand alignment underneath it intact.
+
 Folding is refused rather than clamped. A folded cell has a degenerate homography and
 the patch turns inside out or vanishes; `meshIsDrawable(movingPointAt:to:)` checks the
 up-to-four cells touching the dragged point and the drag is simply not applied.

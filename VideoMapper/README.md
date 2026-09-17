@@ -262,7 +262,7 @@ See [ARCHITECTURE.md](ARCHITECTURE.md) for how the pieces fit together and why.
 
 ## Status
 
-Builds clean and all 126 unit tests pass on CI (`.github/workflows/ios.yml`, Xcode on
+Builds clean and all 162 unit tests pass on CI (`.github/workflows/ios.yml`, Xcode on
 a macOS runner), which also launches the app in a simulator to catch crashes that
 compile fine. Every push uploads an unsigned `.ipa` artifact.
 

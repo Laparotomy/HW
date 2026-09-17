@@ -232,9 +232,14 @@ struct InspectorPanel: View {
                         .foregroundStyle(.orange)
                 }
 
-                if layer.transform.mesh.isWarped {
-                    Button("Flatten the grid again") {
-                        controller.updateLayer(id: layer.id) { $0.transform.mesh.reset() }
+                if layer.transform.mesh.hasScanCorrection {
+                    // Only the bend, not the hand alignment underneath it: the two
+                    // are stored separately so this is a real undo rather than a
+                    // flatten.
+                    Button("Remove the bend") {
+                        controller.updateLayer(id: layer.id) {
+                            $0.transform.mesh.clearScanCorrection()
+                        }
                         controller.saveNow()
                         scanMessage = nil
                     }

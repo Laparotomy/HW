@@ -63,6 +63,8 @@ enum LayerContent: Codable, Equatable {
 
     var isVideo: Bool { if case .video = self { return true }; return false }
 
+    var isSolid: Bool { if case .solid = self { return true }; return false }
+
     var generator: (kind: GeneratorKind, settings: GeneratorSettings)? {
         if case .generator(let kind, let settings) = self { return (kind, settings) }
         return nil
@@ -173,7 +175,7 @@ struct LayerTransform: Codable, Equatable {
             for column in 0...mesh.columns {
                 let parameter = mesh.parameter(column: column, row: row)
                 let base = Homography.apply(matrix, to: parameter)
-                let offset = mesh.offset(column: column, row: row)
+                let offset = mesh.effectiveOffset(at: mesh.index(column: column, row: row))
                 points.append(CGPoint(x: base.x + offset.x, y: base.y + offset.y))
             }
         }
@@ -214,7 +216,11 @@ struct LayerTransform: Codable, Equatable {
         return cells
     }
 
-    /// Rewrites a mesh offset so the control point lands on `position`.
+    /// Rewrites the *hand* offset of a control point so it lands on `position`.
+    ///
+    /// Any scan correction on that point stays in place and is measured around: drag
+    /// a handle on a bent layer and it goes where the finger is, while re-running the
+    /// bend still recomputes only its own share.
     mutating func setMeshPoint(_ index: Int, to position: CGPoint, scale: Double = 1) {
         guard (0..<mesh.pointCount).contains(index) else { return }
         var probe = self
@@ -226,6 +232,33 @@ struct LayerTransform: Codable, Equatable {
     /// Changes the grid, keeping the correction already dialled in.
     mutating func setMeshDivisions(columns: Int, rows: Int) {
         mesh = mesh.resized(columns: columns, rows: rows)
+    }
+
+    /// Prepares the grid for a correction that needs somewhere to put curvature.
+    ///
+    /// A four-corner layer has no interior points, so bending it to a surface would
+    /// silently do nothing — which looks exactly like the scan having failed. Raising
+    /// it to a usable density first is safe: an unwarped mesh reproduces the
+    /// homography exactly, so this moves nothing.
+    mutating func prepareMeshForCorrection(columns: Int = 4, rows: Int = 4) {
+        guard !mesh.isSubdivided else { return }
+        setMeshDivisions(columns: columns, rows: rows)
+    }
+
+    /// The mapping as authored by hand, with any previous bend removed.
+    ///
+    /// This is what a new solve has to measure from. Solving against the already-bent
+    /// positions and adding the result would apply the correction a second time, and
+    /// tapping "bend" twice would double it.
+    var handAuthored: LayerTransform {
+        var copy = self
+        copy.mesh.clearScanCorrection()
+        return copy
+    }
+
+    /// Replaces the scan-derived part of the correction. Hand offsets are untouched.
+    mutating func setScanCorrection(_ offsets: [CGPoint]) {
+        mesh.setScanOffsets(offsets)
     }
 
     /// True when every cell touching `index` stays convex — a folded cell makes its
@@ -276,6 +309,27 @@ struct MappingLayer: Codable, Equatable, Identifiable {
             appearance.tint = RGBAColor(red: 1, green: 1, blue: 1)
             appearance.tintAmount = 1
         }
+    }
+
+    /// Swaps what the layer shows, keeping everything about where it shows it.
+    ///
+    /// The mapping is the expensive part of a show and the content inside it is not,
+    /// so this deliberately touches neither the transform, the correction grid, the
+    /// blend nor the audio routing. Two small courtesies are worth the special case:
+    /// a layer still carrying its old content's name is renamed to the new one, and a
+    /// colour wash — which is tinted white at full mix so the swatch is visible — has
+    /// that tint dropped, or real content would come out washed to flat white.
+    func replacingContent(with content: LayerContent) -> MappingLayer {
+        var copy = self
+        if copy.name == copy.content.displayName {
+            copy.name = content.displayName
+        }
+        let wasSolid = copy.content.isSolid
+        copy.content = content
+        if wasSolid, !content.isSolid {
+            copy.appearance.tintAmount = 0
+        }
+        return copy
     }
 
     /// Creates a generator layer filling the whole canvas.
