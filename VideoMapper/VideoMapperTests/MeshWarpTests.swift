@@ -219,14 +219,14 @@ final class MeshWarpPersistenceTests: XCTestCase {
     /// A show saved before the mesh existed has no `mesh` key at all. The synthesised
     /// decoder would reject it outright, which would lose the user's work.
     func testALayerSavedBeforeTheMeshExistedStillDecodes() throws {
+        // CGPoint and CGSize encode as two-element arrays, not keyed objects —
+        // this is the shape the app has always written.
         let json = """
         {
-          "center": {"x": 0.5, "y": 0.5},
-          "size": {"width": 0.6, "height": 0.6},
+          "center": [0.5, 0.5],
+          "size": [0.6, 0.6],
           "rotation": 0,
-          "cornerOffsets": [
-            {"x": 0, "y": 0}, {"x": 0.1, "y": 0}, {"x": 0, "y": 0}, {"x": 0, "y": 0}
-          ]
+          "cornerOffsets": [[0, 0], [0.1, 0], [0, 0], [0, 0]]
         }
         """
         let transform = try JSONDecoder().decode(LayerTransform.self, from: Data(json.utf8))
@@ -240,7 +240,7 @@ final class MeshWarpPersistenceTests: XCTestCase {
     /// index the renderer out of bounds.
     func testAMismatchedOffsetArrayIsRepaired() throws {
         let json = """
-        {"columns": 3, "rows": 3, "offsets": [{"x": 0.1, "y": 0.1}]}
+        {"columns": 3, "rows": 3, "offsets": [[0.1, 0.1]]}
         """
         let mesh = try JSONDecoder().decode(MeshWarp.self, from: Data(json.utf8))
         XCTAssertEqual(mesh.offsets.count, 16)
