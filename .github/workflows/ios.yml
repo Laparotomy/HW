@@ -1,0 +1,138 @@
+name: iOS
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: Build, test and package
+    runs-on: macos-15
+    defaults:
+      run:
+        working-directory: VideoMapper
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Toolchain versions
+        run: |
+          xcodebuild -version
+          swift --version
+
+      - name: Choose a simulator
+        id: sim
+        run: |
+          xcrun simctl list devices available --json > /tmp/devices.json
+          UDID=$(python3 -c "import json; d=json.load(open('/tmp/devices.json'))['devices']; print(next(dev['udid'] for rt, ds in sorted(d.items()) if 'iOS' in rt for dev in ds if 'iPhone' in dev['name']))")
+          echo "Using simulator $UDID"
+          echo "udid=$UDID" >> "$GITHUB_OUTPUT"
+
+      - name: Build for simulator
+        run: |
+          set -o pipefail
+          xcodebuild build \
+            -project VideoMapper.xcodeproj \
+            -scheme VideoMapper \
+            -destination "id=${{ steps.sim.outputs.udid }}" \
+            -derivedDataPath build-sim \
+            CODE_SIGNING_ALLOWED=NO
+
+      # Unit tests never open the app, so they cannot catch "it does not launch".
+      # A crash report is the only unambiguous evidence of a launch failure —
+      # process-liveness probes are unreliable against the simulator — so this step
+      # fails on a crash report and otherwise reports what it saw.
+      - name: Smoke launch
+        run: |
+          UDID="${{ steps.sim.outputs.udid }}"
+          APP=build-sim/Build/Products/Debug-iphonesimulator/VideoMapper.app
+          BUNDLE_ID=app.videomapper.VideoMapper
+          SIM_REPORTS="$HOME/Library/Developer/CoreSimulator/Devices/$UDID/data/Library/Logs/DiagnosticReports"
+          HOST_REPORTS="$HOME/Library/Logs/DiagnosticReports"
+
+          xcrun simctl boot "$UDID" 2>/dev/null || true
+          xcrun simctl bootstatus "$UDID" || true
+          xcrun simctl install "$UDID" "$APP"
+
+          rm -f "$SIM_REPORTS"/VideoMapper* "$HOST_REPORTS"/VideoMapper* 2>/dev/null || true
+          xcrun simctl launch "$UDID" "$BUNDLE_ID" || true
+          sleep 12
+
+          FOUND=0
+          shopt -s nullglob
+          for f in "$SIM_REPORTS"/VideoMapper* "$HOST_REPORTS"/VideoMapper*; do
+            echo "::error::App crashed on launch"
+            echo "----- $f -----"
+            head -400 "$f"
+            FOUND=1
+          done
+          [ "$FOUND" -eq 0 ] || exit 1
+
+          echo "::notice::App launched with no crash report"
+          xcrun simctl spawn "$UDID" log show --last 2m \
+            --predicate 'process == "VideoMapper" AND messageType == "error"' \
+            --style compact 2>/dev/null | tail -20 || true
+
+      - name: Run unit tests
+        run: |
+          set -o pipefail
+          xcodebuild test \
+            -project VideoMapper.xcodeproj \
+            -scheme VideoMapper \
+            -destination "id=${{ steps.sim.outputs.udid }}" \
+            -derivedDataPath build-sim \
+            -resultBundlePath TestResults.xcresult \
+            CODE_SIGNING_ALLOWED=NO
+
+      - name: Diagnose test failure
+        if: failure()
+        run: |
+          UDID="${{ steps.sim.outputs.udid }}"
+          echo "===== crash reports ====="
+          shopt -s nullglob
+          for f in "$HOME/Library/Developer/CoreSimulator/Devices/$UDID/data/Library/Logs/DiagnosticReports"/* \
+                   "$HOME/Library/Logs/DiagnosticReports"/*; do
+            case "$f" in
+              *VideoMapper*|*xctest*)
+                echo "----- $f -----"
+                head -400 "$f"
+                ;;
+            esac
+          done
+          echo "===== app log around the failure ====="
+          xcrun simctl spawn "$UDID" log show --last 5m \
+            --predicate 'process == "VideoMapper"' --style compact 2>/dev/null | tail -60 || true
+
+      - name: Upload test results
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: xcresult
+          path: VideoMapper/TestResults.xcresult
+          if-no-files-found: ignore
+
+      # Unsigned device build, packaged as an .ipa. It cannot be installed as-is —
+      # it has to be re-signed with the installer's own Apple ID (Sideloadly,
+      # AltStore) or replaced by a properly signed build from Xcode.
+      - name: Package unsigned .ipa
+        run: |
+          set -o pipefail
+          xcodebuild build \
+            -project VideoMapper.xcodeproj \
+            -scheme VideoMapper \
+            -configuration Release \
+            -sdk iphoneos \
+            -derivedDataPath build \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY=""
+          mkdir -p Payload
+          cp -R build/Build/Products/Release-iphoneos/VideoMapper.app Payload/
+          zip -qry VideoMapper-unsigned.ipa Payload
+
+      - name: Upload .ipa
+        uses: actions/upload-artifact@v4
+        with:
+          name: VideoMapper-unsigned-ipa
+          path: VideoMapper/VideoMapper-unsigned.ipa
+          if-no-files-found: error
