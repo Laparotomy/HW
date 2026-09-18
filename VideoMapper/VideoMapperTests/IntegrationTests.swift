@@ -468,6 +468,10 @@ final class WholeProjectIntegrationTests: XCTestCase {
         var project = MappingProject(name: "Generated")
         project.layers = GeneratorKind.allCases.map { MappingLayer.make(generator: $0) }
         XCTAssertTrue(project.referencedMedia.isEmpty)
-        XCTAssertEqual(project.layers.count, 12)
+        // Derived, not a literal: the point is one layer per kind, and a hard-coded
+        // count turns every addition to the library into a failing test that says
+        // nothing about whether the library still carries no media.
+        XCTAssertEqual(project.layers.count, GeneratorKind.allCases.count)
+        XCTAssertGreaterThan(project.layers.count, 1)
     }
 }
