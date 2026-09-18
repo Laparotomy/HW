@@ -15,9 +15,13 @@ final class ContentThumbnailStore: ObservableObject {
 
     /// Wide enough to recognise a clip, small enough that a list of them costs
     /// nothing to keep resident.
-    private static let maximumDimension = 240
+    ///
+    /// `nonisolated` because it is used as a default argument, and default arguments
+    /// are evaluated in the caller's context rather than the callee's — so a
+    /// main-actor-isolated constant cannot be one. Safe: an immutable `Int`.
+    nonisolated private static let maximumDimension = 240
     /// A reference photo is looked at, not glanced at, so it gets a real size.
-    private static let referenceDimension = 1024
+    nonisolated private static let referenceDimension = 1024
 
     /// Keyed by content signature rather than layer id, so duplicating a layer or
     /// reusing a clip does not decode it twice.
@@ -25,6 +29,17 @@ final class ContentThumbnailStore: ObservableObject {
     private var inFlight: Set<String> = []
 
     private init() {}
+
+    /// Carries a decoded image back to the main actor.
+    ///
+    /// `CGImage` is a CoreFoundation type and is not marked `Sendable`, so handing one
+    /// out of a detached task is rejected under strict concurrency. The box is sound
+    /// rather than a silencer: a `CGImage` is immutable once created, this one is
+    /// created inside the task, and nothing else holds a reference to it until the
+    /// main actor takes it.
+    private struct DecodedImage: @unchecked Sendable {
+        let image: CGImage?
+    }
 
     /// A stable key for the thing being drawn. Generator settings are part of it:
     /// change the palette and the preview should follow.
@@ -93,13 +108,13 @@ final class ContentThumbnailStore: ObservableObject {
         let kind = ref.kind
 
         Task.detached(priority: .utility) {
-            let image = kind == .video
+            let decoded = DecodedImage(image: kind == .video
                 ? await Self.videoFrame(at: url, maximum: maximum)
-                : Self.stillImage(at: url, maximum: maximum)
+                : Self.stillImage(at: url, maximum: maximum))
             await MainActor.run { [weak self] in
                 guard let self else { return }
                 self.inFlight.remove(key)
-                if let image { self.images[key] = image }
+                if let image = decoded.image { self.images[key] = image }
             }
         }
     }

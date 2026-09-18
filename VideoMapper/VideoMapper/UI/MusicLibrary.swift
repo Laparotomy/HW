@@ -128,6 +128,18 @@ extension MediaImporter {
         }
     }
 
+    /// Carries the export session into its own completion handler.
+    ///
+    /// `exportAsynchronously` takes a `@Sendable` closure, and `AVAssetExportSession`
+    /// is not `Sendable` — so reading the session's own status from its own callback
+    /// is rejected under strict concurrency, even though that is the documented way to
+    /// use the API. The box is sound rather than a silencer: the session is used from
+    /// one place at a time, and the callback is where the framework itself says its
+    /// status is ready to read.
+    private struct ExportSession: @unchecked Sendable {
+        let session: AVAssetExportSession
+    }
+
     /// The pre-iOS 18 export. Marked deprecated itself so calling the deprecated API
     /// from inside it is not a warning.
     @available(iOS, introduced: 17.0, deprecated: 18.0,
@@ -135,15 +147,17 @@ extension MediaImporter {
     private static func legacyExport(_ session: AVAssetExportSession, to url: URL) async throws {
         session.outputURL = url
         session.outputFileType = .m4a
+        let boxed = ExportSession(session: session)
         try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
-            session.exportAsynchronously {
-                switch session.status {
+            boxed.session.exportAsynchronously {
+                switch boxed.session.status {
                 case .completed:
                     continuation.resume()
                 case .cancelled:
                     continuation.resume(throwing: MusicImportError.exportFailed("the copy was cancelled."))
                 default:
-                    let reason = session.error?.localizedDescription ?? "the reason was not reported."
+                    let reason = boxed.session.error?.localizedDescription
+                        ?? "the reason was not reported."
                     continuation.resume(throwing: MusicImportError.exportFailed(reason))
                 }
             }
