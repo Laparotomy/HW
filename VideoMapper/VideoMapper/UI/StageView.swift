@@ -106,6 +106,14 @@ struct StageView: View {
                     .foregroundStyle(.secondary)
             }
             referenceUnderlay
+            // Knocks the picture back so thin accent-coloured lines read over a
+            // bright clip. Drawn here, in the editing stage only — `OutputView` puts
+            // the same renderer on the projector untouched.
+            if controller.stageDisplay.scrimOpacity > 0 {
+                Color.black
+                    .opacity(controller.stageDisplay.scrimOpacity)
+                    .allowsHitTesting(false)
+            }
             overlay(size: size)
         }
         .contentShape(Rectangle())
@@ -165,41 +173,66 @@ struct StageView: View {
 
     @ViewBuilder
     private func overlay(size: CGSize) -> some View {
-        if let layer = controller.selectedLayer, layer.isVisible {
-            let quad = layer.transform.quad()
-            let points = quad.corners.map { point(for: $0, in: size) }
-
-            Path { path in
-                path.move(to: points[0])
-                for p in points.dropFirst() { path.addLine(to: p) }
-                path.closeSubpath()
-            }
-            .stroke(layer.isLocked ? Color.orange : Color.accentColor,
-                    style: StrokeStyle(lineWidth: 1.5, dash: layer.isLocked ? [6, 4] : []))
-            .allowsHitTesting(false)
-
-            if controller.stageMode == .warp && !layer.isLocked {
-                if layer.transform.mesh.isSubdivided {
-                    meshOverlay(layer: layer, size: size)
-                } else {
-                    ForEach(Array(points.enumerated()), id: \.offset) { index, position in
-                        handle(at: position, label: Self.cornerNames[index],
-                               isActive: activeCorner == index, isCorner: true)
-                    }
+        if controller.stageDisplay.showsGrid {
+            // Every visible layer draws its own outline and grid, the unselected ones
+            // knocked back. Two surfaces have to be lined up against each other to
+            // meet without a seam, and that is impossible while only one of them is
+            // on screen.
+            if controller.showsAllLayerGrids {
+                ForEach(controller.project.layers.filter {
+                    $0.isVisible && $0.id != controller.selectedLayerID
+                }) { layer in
+                    wireframe(for: layer, size: size, isSelected: false)
                 }
-                snapBadge(layer: layer, size: size)
+            }
+
+            if let layer = controller.selectedLayer, layer.isVisible {
+                wireframe(for: layer, size: size, isSelected: true)
+
+                if controller.stageMode == .warp && !layer.isLocked {
+                    handles(for: layer, size: size)
+                    snapBadge(layer: layer, size: size)
+                }
             }
         }
     }
 
-    /// Control points plus the cell edges between them, so the correction being
-    /// applied is visible rather than guessed at from the image alone.
+    /// A layer's outline, and the cell edges inside it when it carries a grid.
+    ///
+    /// Lines only: the handles are drawn separately and only for the layer in hand,
+    /// because two dozen draggable-looking dots that do not answer to a finger are
+    /// worse than none.
     @ViewBuilder
-    private func meshOverlay(layer: MappingLayer, size: CGSize) -> some View {
-        let mesh = layer.transform.mesh
-        let points = layer.transform.meshPoints().map { point(for: $0, in: size) }
+    private func wireframe(for layer: MappingLayer, size: CGSize,
+                           isSelected: Bool) -> some View {
+        let quad = layer.transform.quad()
+        let corners = quad.corners.map { point(for: $0, in: size) }
+        let colour = layer.isLocked ? Color.orange : Color.accentColor
+        let strength: Double = isSelected ? 1 : 0.42
 
         Path { path in
+            path.move(to: corners[0])
+            for p in corners.dropFirst() { path.addLine(to: p) }
+            path.closeSubpath()
+        }
+        .stroke(colour.opacity(strength),
+                style: StrokeStyle(lineWidth: isSelected ? 1.5 : 1,
+                                   dash: layer.isLocked ? [6, 4] : []))
+        .allowsHitTesting(false)
+
+        if layer.transform.mesh.isSubdivided {
+            meshPath(for: layer, size: size)
+                .stroke(colour.opacity(strength * 0.5), lineWidth: 1)
+                .allowsHitTesting(false)
+        }
+    }
+
+    /// The cell edges of a layer's correction grid, so the correction being applied
+    /// is visible rather than guessed at from the image alone.
+    private func meshPath(for layer: MappingLayer, size: CGSize) -> Path {
+        let mesh = layer.transform.mesh
+        let points = layer.transform.meshPoints().map { point(for: $0, in: size) }
+        return Path { path in
             for row in 0...mesh.rows {
                 for column in 0...mesh.columns {
                     let index = mesh.index(column: column, row: row)
@@ -216,19 +249,31 @@ struct StageView: View {
                 }
             }
         }
-        .stroke(Color.accentColor.opacity(0.45), lineWidth: 1)
-        .allowsHitTesting(false)
+    }
 
-        ForEach(Array(points.enumerated()), id: \.offset) { index, position in
-            let column = index % mesh.pointsAcross
-            let row = index / mesh.pointsAcross
-            let isCorner = (column == 0 || column == mesh.columns)
-                && (row == 0 || row == mesh.rows)
-            handle(at: position,
-                   label: label(column: column, row: row, isCorner: isCorner,
-                                pointCount: mesh.pointCount, isActive: activeMeshPoint == index),
-                   isActive: activeMeshPoint == index,
-                   isCorner: isCorner)
+    @ViewBuilder
+    private func handles(for layer: MappingLayer, size: CGSize) -> some View {
+        let mesh = layer.transform.mesh
+        if mesh.isSubdivided {
+            let points = layer.transform.meshPoints().map { point(for: $0, in: size) }
+            ForEach(Array(points.enumerated()), id: \.offset) { index, position in
+                let column = index % mesh.pointsAcross
+                let row = index / mesh.pointsAcross
+                let isCorner = (column == 0 || column == mesh.columns)
+                    && (row == 0 || row == mesh.rows)
+                handle(at: position,
+                       label: label(column: column, row: row, isCorner: isCorner,
+                                    pointCount: mesh.pointCount,
+                                    isActive: activeMeshPoint == index),
+                       isActive: activeMeshPoint == index,
+                       isCorner: isCorner)
+            }
+        } else {
+            let corners = layer.transform.quad().corners.map { point(for: $0, in: size) }
+            ForEach(Array(corners.enumerated()), id: \.offset) { index, position in
+                handle(at: position, label: Self.cornerNames[index],
+                       isActive: activeCorner == index, isCorner: true)
+            }
         }
     }
 

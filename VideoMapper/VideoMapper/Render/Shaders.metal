@@ -127,6 +127,10 @@ static float3 palette(float t, int index) {
         case 4:  a = float3(0.50, 0.50, 0.50); b = float3(0.50, 0.50, 0.50); d = float3(0.00, 0.33, 0.67); break; // rainbow
         case 5:  a = float3(0.60, 0.35, 0.40); b = float3(0.40, 0.30, 0.30); d = float3(0.00, 0.10, 0.20); break; // sunset
         case 6:  a = float3(0.40, 0.60, 0.30); b = float3(0.30, 0.40, 0.30); d = float3(0.10, 0.00, 0.30); break; // toxic
+        case 8:  a = float3(0.50, 0.13, 0.08); b = float3(0.50, 0.28, 0.12); d = float3(0.00, 0.08, 0.18); break; // magma
+        case 9:  a = float3(0.08, 0.28, 0.42); b = float3(0.14, 0.30, 0.42); d = float3(0.55, 0.62, 0.72); break; // ocean
+        case 10: a = float3(0.65, 0.48, 0.62); b = float3(0.35, 0.40, 0.35); d = float3(0.80, 0.92, 0.28); break; // candy
+        case 11: a = float3(0.34, 0.26, 0.46); b = float3(0.34, 0.24, 0.36); d = float3(0.68, 0.86, 0.14); break; // dusk
         default: a = float3(0.55, 0.60, 0.68); b = float3(0.20, 0.20, 0.22); d = float3(0.10, 0.15, 0.20); break; // mist
     }
     return saturate(a + b * cos(6.2831853 * (t + d)));
@@ -286,6 +290,238 @@ static float3 generateStrobe(float time, float drive, int pal) {
     return palette(0.5 + v * 0.5, pal) * v;
 }
 
+// A logarithmic spiral: the arm count stays constant at every radius, which is what
+// keeps it readable when it is warped onto something round.
+static float3 generateSpiral(float2 p, float time, float scale, float complexity,
+                             float drive, int pal) {
+    float r = length(p);
+    float a = atan2(p.y, p.x);
+    float arms = 2.0 + floor(complexity * 6.0);
+    float v = 0.5 + 0.5 * sin(a * arms + log(max(r, 0.02)) * scale - time * 2.0);
+    v = pow(saturate(v), 2.0);
+    v *= smoothstep(0.95, 0.05, r);
+    return palette(0.4 + r * 0.5 + time * 0.03, pal) * saturate(v * (1.0 + drive));
+}
+
+// Two line sets at slowly diverging angles. The beat pattern between them is the
+// whole effect, and it is far stronger than either set alone — which is also why the
+// second set is detuned by 4%: identical spacings would just give one set back.
+static float3 generateMoire(float2 p, float time, float scale, float drive, int pal) {
+    float a1 = time * 0.11;
+    float a2 = -time * 0.13 + 0.15;
+    float2 d1 = float2(cos(a1), sin(a1));
+    float2 d2 = float2(cos(a2), sin(a2));
+    float s = scale * 6.0 * (1.0 + drive * 0.3);
+    float l1 = 0.5 + 0.5 * cos(dot(p, d1) * s);
+    float l2 = 0.5 + 0.5 * cos(dot(p, d2) * s * 1.04);
+    float v = saturate(l1 * l2 * 2.0);
+    return palette(v * 0.5 + time * 0.04, pal) * v;
+}
+
+static float3 generateLightning(float2 p, float time, float scale, float complexity,
+                                float drive, float seed, int pal) {
+    float3 acc = float3(0.0);
+    for (int i = 0; i < 3; i++) {
+        float fi = float(i);
+        // A strike lives for one slot and a new one is seeded after it, so the
+        // pattern never repeats and nothing has to be stored between frames.
+        float slot = floor(time * 0.5 + fi * 0.37);
+        float life = fract(time * 0.5 + fi * 0.37);
+        float x = hash11(slot + seed + fi * 53.0) * 2.0 - 1.0;
+        float wander = (fbm(float2(p.y * scale * 0.5, slot + seed), complexity) - 0.5) * 0.9;
+        float d = abs(p.x - x * 0.6 - wander);
+        float core = smoothstep(0.02, 0.0, d);
+        float glow = smoothstep(0.16, 0.0, d) * 0.35;
+        float flash = pow(saturate(1.0 - life), 5.0);
+        acc += palette(0.62 + fi * 0.06, pal) * (core + glow) * flash;
+    }
+    return acc * (0.7 + drive * 2.0);
+}
+
+static float3 generateFireflies(float2 p, float time, float scale, float drive,
+                                float seed, int pal) {
+    float cells = max(scale, 1.0) * 1.5;
+    float2 q = p * cells;
+    float2 base = floor(q);
+    float3 acc = float3(0.0);
+    // Only the nine cells around the sample can hold a fly close enough to see.
+    for (int j = -1; j <= 1; j++) {
+        for (int i = -1; i <= 1; i++) {
+            float2 cell = base + float2(i, j);
+            float2 rnd = hash22(cell + seed);
+            float id = rnd.x + rnd.y * 37.0;
+            float2 centre = cell + 0.5 + 0.35 * float2(sin(time * (0.4 + rnd.x) + rnd.y * 6.2831853),
+                                                       cos(time * (0.3 + rnd.y) + rnd.x * 6.2831853));
+            float pulse = 0.35 + 0.65 * (0.5 + 0.5 * sin(time * (1.1 + rnd.x * 1.7) + id * 6.2831853));
+            float d = length(q - centre) / max(cells, 0.001);
+            float glow = smoothstep(0.03, 0.0, d) + smoothstep(0.09, 0.0, d) * 0.25;
+            acc += palette(0.1 + rnd.x * 0.3, pal) * glow * pulse;
+        }
+    }
+    return acc * (1.0 + drive * 1.2);
+}
+
+static float3 generateHexes(float2 p, float time, float scale, float drive,
+                            float seed, int pal) {
+    // A hex lattice is two rectangular lattices offset by half a cell; whichever
+    // centre is nearer is the one this pixel belongs to.
+    const float2 s = float2(1.0, 1.7320508);
+    float2 q = p * max(scale, 0.5);
+    float2 hc = floor(q / s) + 0.5;
+    float2 a = q - hc * s;
+    float2 b = q - (hc + 0.5) * s;
+    float2 g = dot(a, a) < dot(b, b) ? a : b;
+    float2 centre = q - g;
+    float id = centre.x * 7.3 + centre.y * 13.7 + seed;
+
+    // Distance in the six-fold metric: the Voronoi cell's flat sides sit at 0.5.
+    float hex = max(abs(g.x), dot(abs(g), float2(0.5, 0.8660254)));
+    float body = smoothstep(0.50, 0.46, hex);
+    float inner = smoothstep(0.46, 0.42, hex);
+    float rim = saturate(body - inner);
+    float lit = 0.5 + 0.5 * sin(time * 2.0 + hash11(id) * 6.2831853);
+    float v = saturate(inner * (0.1 + lit * 0.85) + rim * 0.9);
+    return palette(hash11(id + 3.0) * 0.4 + 0.2, pal) * v * (1.0 + drive * 0.8);
+}
+
+static float3 generateLiquid(float2 p, float time, float scale, float complexity,
+                             float drive, float seed, int pal) {
+    // A height field sampled three times a short step apart. The slope stands in for
+    // a surface normal, and the places where it flattens out are the caustics — far
+    // cheaper than tracing anything, and it reads as water from across a room.
+    float2 drift = float2(time * 0.2, time * 0.13);
+    float2 q = p * scale + seed + drift;
+    float h = fbm(q, complexity);
+    float hx = fbm(q + float2(0.06, 0.0), complexity);
+    float hy = fbm(q + float2(0.0, 0.06), complexity);
+    float2 slope = float2(hx - h, hy - h) * 40.0;
+    float flatness = saturate(1.0 - length(slope) * 0.35);
+    float caustic = pow(flatness, 3.0);
+    float v = saturate(h * 0.55 + caustic * (0.8 + drive * 0.8));
+    return palette(h * 0.5 + 0.1 + length(slope) * 0.1, pal) * v;
+}
+
+static float3 generateSweep(float2 p, float time, float scale, float complexity,
+                            float drive, int pal) {
+    // Complexity is the bar's angle, not its detail: one source then covers a bar
+    // crossing a wide wall and a bar running down a column.
+    float angle = complexity * 3.14159265;
+    float2 dir = float2(cos(angle), sin(angle));
+    float travel = dot(p, dir) * 0.7 + 0.5;
+    float head = fract(time * 0.5);
+    float d = travel - head;
+    // Wrap to the nearest cycle, so the bar re-enters instead of jumping.
+    d -= floor(d + 0.5);
+    float width = 0.02 + 0.2 / max(scale, 0.5);
+    float bar = smoothstep(width, 0.0, abs(d));
+    float trail = smoothstep(width * 6.0, 0.0, max(-d, 0.0)) * 0.35;
+    float v = saturate((bar + trail) * (1.0 + drive));
+    return palette(0.55 + d, pal) * v;
+}
+
+static float3 generateBars(float2 uv, float time, float scale, float drive,
+                           float seed, int pal) {
+    // A level meter, and the only source here whose point is the audio: with nothing
+    // driving it the bars still breathe, but they only really move when fed.
+    float count = clamp(floor(scale * 2.0), 3.0, 32.0);
+    float slot = floor(uv.x * count);
+    float within = fract(uv.x * count);
+    float body = smoothstep(0.08, 0.16, within) * smoothstep(0.92, 0.84, within);
+    float id = slot + seed;
+    float sway = 0.5 + 0.5 * sin(time * (1.3 + hash11(id) * 2.0) + hash11(id + 9.0) * 6.2831853);
+    float height = saturate(0.15 + sway * 0.3 + drive * 0.7);
+    // uv runs y-down, so a bar of this height grows up from the bottom edge.
+    float top = 1.0 - height;
+    float fill = smoothstep(top + 0.012, top - 0.012, uv.y);
+    return palette(0.12 + height * 0.55, pal) * saturate(body * fill);
+}
+
+static float3 generateConfetti(float2 uv, float time, float scale, float drive,
+                               float seed, int pal) {
+    float columns = clamp(floor(scale * 6.0), 6.0, 90.0);
+    float x = uv.x * columns;
+    float col = floor(x);
+    float within = fract(x) - 0.5;
+    float3 acc = float3(0.0);
+    // Two flakes per column, each on its own fall rate, which is enough to stop the
+    // field reading as rows.
+    for (int i = 0; i < 2; i++) {
+        float id = col + float(i) * 311.0 + seed;
+        float speed = 0.25 + hash11(id) * 0.5;
+        float y = fract(uv.y - time * speed - hash11(id + 5.0));
+        float2 d = float2(within * 1.6, (y - 0.5) * 6.0);
+        float piece = smoothstep(0.5, 0.0, length(d));
+        acc += palette(hash11(id + 11.0), pal) * piece;
+    }
+    return acc * (0.9 + drive * 1.1);
+}
+
+static float3 generateRipple(float2 p, float time, float scale, float drive,
+                             float seed, int pal) {
+    float3 acc = float3(0.0);
+    // Four drops, staggered so one is always mid-spread and the surface is never
+    // entirely still.
+    for (int i = 0; i < 4; i++) {
+        float fi = float(i);
+        float slot = floor(time * 0.4 + fi * 0.25);
+        float life = fract(time * 0.4 + fi * 0.25);
+        float2 c = (hash22(float2(slot, fi) + seed) - 0.5) * 0.9;
+        float front = life * 0.8;
+        float d = abs(length(p - c) - front);
+        float w = 0.01 + life * 0.04 + 0.6 / max(scale * 8.0, 1.0);
+        float ring = smoothstep(w, 0.0, d);
+        // Fading as it spreads is what stops the oldest ring sitting on the frame edge.
+        acc += palette(0.45 + fi * 0.1 + front, pal) * ring * (1.0 - life);
+    }
+    return acc * (1.0 + drive * 1.2);
+}
+
+static float3 generateMatrix(float2 uv, float time, float scale, float drive,
+                             float seed, int pal) {
+    float columns = clamp(floor(scale * 5.0), 6.0, 80.0);
+    float x = uv.x * columns;
+    float col = floor(x);
+    float gutter = smoothstep(0.42, 0.3, abs(fract(x) - 0.5));
+
+    float id = col + seed;
+    float speed = 0.2 + hash11(id) * 0.5;
+    float head = fract(time * speed + hash11(id + 3.0));
+    // Distance behind the head, wrapped, so a trail that runs off the bottom comes
+    // back in at the top without a seam.
+    float d = head - uv.y;
+    d -= floor(d);
+    float trail = pow(saturate(1.0 - d * (3.0 + hash11(id + 7.0) * 5.0)), 2.0);
+    // Cells flickering within the column is what sells this as falling glyphs
+    // rather than a gradient.
+    float cell = floor(uv.y * columns * 1.2);
+    float flicker = 0.55 + 0.45 * hash11(cell * 3.7 + id + floor(time * 8.0));
+    float3 colour = palette(0.3 + trail * 0.25, pal);
+    // The leading character is near-white, which is what gives the trail direction.
+    colour = mix(colour, float3(1.0), smoothstep(0.9, 1.0, trail));
+    return colour * saturate(gutter * trail * flicker) * (0.9 + drive);
+}
+
+static float3 generateNebula(float2 p, float time, float scale, float complexity,
+                             float drive, float seed, int pal) {
+    float2 q = p * scale + seed;
+    float2 drift = float2(time * 0.06, -time * 0.04);
+    // One warp field shared by both shells. A second would double the noise cost
+    // for a difference nobody sees on a wall.
+    float2 w = float2(fbm(q + drift + 2.3, complexity),
+                      fbm(q - drift - 5.1, complexity)) - 0.5;
+    float3 acc = float3(0.0);
+    for (int i = 0; i < 2; i++) {
+        float fi = float(i);
+        float2 s = q * (1.0 + fi * 0.55) + w * (1.8 + fi * 0.9) + drift * (1.0 + fi);
+        float density = smoothstep(0.34 + fi * 0.08, 0.92, fbm(s, complexity));
+        acc += palette(0.12 + fi * 0.3 + density * 0.2, pal) * density * (0.75 - fi * 0.2);
+    }
+    // A bright core, so the thing has somewhere to look.
+    float core = exp(-dot(p, p) * 5.0);
+    acc += palette(0.06, pal) * core * (0.35 + drive * 0.5);
+    return acc * (1.0 + drive * 0.5);
+}
+
 // Dispatches to the selected generator. Index 0 means the layer is media-backed and
 // this is never called.
 static float3 generate(int index, float2 uv, float aspect, float showTime,
@@ -309,6 +545,21 @@ static float3 generate(int index, float2 uv, float aspect, float showTime,
         case 10: return generateAurora(p, time, scale, complexity, drive, seed, pal);
         case 11: return generateMetaballs(p, time, scale, drive, pal);
         case 12: return generateStrobe(time, drive, pal);
+        case 13: return generateSpiral(p, time, scale, complexity, drive, pal);
+        case 14: return generateMoire(p, time, scale, drive, pal);
+        case 15: return generateLightning(p, time, scale, complexity, drive, seed, pal);
+        case 16: return generateFireflies(p, time, scale, drive, seed, pal);
+        case 17: return generateHexes(p, time, scale, drive, seed, pal);
+        case 18: return generateLiquid(p, time, scale, complexity, drive, seed, pal);
+        case 19: return generateSweep(p, time, scale, complexity, drive, pal);
+        // These four are laid out against the frame rather than around its centre,
+        // so they take the raw uv: a meter has to start at the bottom edge and a
+        // column of rain has to run the full height however wide the canvas is.
+        case 20: return generateBars(uv, time, scale, drive, seed, pal);
+        case 21: return generateConfetti(uv, time, scale, drive, seed, pal);
+        case 22: return generateRipple(p, time, scale, drive, seed, pal);
+        case 23: return generateMatrix(uv, time, scale, drive, seed, pal);
+        case 24: return generateNebula(p, time, scale, complexity, drive, seed, pal);
         default: return float3(0.0);
     }
 }

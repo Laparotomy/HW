@@ -186,12 +186,35 @@ struct ContentView: View {
 
             Spacer()
 
+            displayMenu
+                .buttonStyle(.bordered)
+
             Picker("Stage mode", selection: $controller.stageMode) {
                 ForEach(ShowController.StageMode.allCases) { Text($0.displayName).tag($0) }
             }
             .pickerStyle(.segmented)
-            .frame(width: 130)
+            .frame(width: 120)
         }
+    }
+
+    /// Switches the stage between the picture, the mapping and both, and says whether
+    /// the layers you are not editing show their grids too.
+    private var displayMenu: some View {
+        Menu {
+            Picker("Show", selection: $controller.stageDisplay) {
+                ForEach(ShowController.StageDisplay.allCases) { mode in
+                    Label(mode.displayName, systemImage: mode.symbolName).tag(mode)
+                }
+            }
+            .pickerStyle(.inline)
+
+            Divider()
+
+            Toggle("Grids on every layer", isOn: $controller.showsAllLayerGrids)
+        } label: {
+            Image(systemName: controller.stageDisplay.symbolName)
+        }
+        .accessibilityLabel("Stage shows \(controller.stageDisplay.displayName)")
     }
 
     // MARK: - Expanded stage
@@ -219,7 +242,15 @@ struct ContentView: View {
                     ForEach(ShowController.StageMode.allCases) { Text($0.displayName).tag($0) }
                 }
                 .pickerStyle(.segmented)
-                .frame(width: 140)
+                .frame(width: 130)
+
+                Picker("Show", selection: $controller.stageDisplay) {
+                    ForEach(ShowController.StageDisplay.allCases) { mode in
+                        Image(systemName: mode.symbolName).tag(mode)
+                    }
+                }
+                .pickerStyle(.segmented)
+                .frame(width: 130)
 
                 Spacer()
 
@@ -265,6 +296,9 @@ struct ContentView: View {
                 }
                 .pickerStyle(.segmented)
                 .frame(width: 130)
+
+                displayMenu
+                    .font(.title2)
 
                 if controller.sync.role != .follower {
                     Button {

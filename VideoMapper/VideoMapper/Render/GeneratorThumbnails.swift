@@ -9,14 +9,15 @@ import os
 /// The previews come out of the *same* fragment shader the stage uses, so what the
 /// browser shows is what the projector will draw — a hand-drawn icon set would drift
 /// away from the shaders the first time one is tweaked. They are stills rather than
-/// twelve live `MTKView`s because twelve simultaneous Metal layers is a lot of
-/// display budget to spend on a picker.
+/// live `MTKView`s because two dozen simultaneous Metal layers is a lot of display
+/// budget to spend on a picker.
 @MainActor
 final class GeneratorThumbnailRenderer {
     static let shared = GeneratorThumbnailRenderer()
 
-    /// Small enough that all twelve render in a single command buffer in well under
-    /// a frame, large enough to read the pattern on a phone.
+    /// Small enough that each renders in a single command buffer in well under a
+    /// frame, large enough to read the pattern on a phone. They are rendered on
+    /// demand and cached, so a shelf you never open costs nothing.
     private static let size = (width: 240, height: 135)
     /// Frozen at a show time where every generator has developed some structure;
     /// time zero leaves several of them a flat field.
@@ -124,8 +125,9 @@ final class GeneratorThumbnailRenderer {
         var settings = kind.defaultSettings.clamped()
         if let palette { settings.palette = palette }
         let aspect = Double(size.width) / Double(size.height)
-        // A strobe caught mid-decay is a black rectangle; show it lit instead.
-        let drive: Float = kind == .strobe ? 0.85 : 0.35
+        // A beat-driven source caught between hits is a black rectangle — an honest
+        // picture of one frame and a useless picture of the source. Show it lit.
+        let drive = kind.previewDrive
         return LayerUniforms(
             homography: Homography.unitSquare(to: Quad.unit),
             tint: RGBAColor.white.simd,

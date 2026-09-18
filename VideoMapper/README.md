@@ -36,6 +36,25 @@ points start exactly where the corner warp already puts them.
 **Handles say what they are.** Corners are labelled TL/TR/BR/BL and interior points
 by their column and row, so "pull 3·2 left a bit" means something across a room.
 
+**Every layer shows its grid.** The stage draws the outline and correction grid of
+every visible layer, the ones you are not editing knocked back, because surfaces
+that have to meet cannot be lined up against each other while only one of them is on
+screen. Handles stay on the selected layer alone — two dozen draggable-looking dots
+that do not answer to a finger are worse than none.
+
+**Switch between the picture and the mapping.** The Content / Grid / Both control
+beside the transport decides what the stage shows:
+
+| | |
+| --- | --- |
+| **Content** | Exactly what the projector puts on the wall, nothing drawn over it. |
+| **Grid** | The mapping, over a dimmed picture — lines stay readable over a bright clip. |
+| **Both** | The working default. |
+
+The dimming is a property of the editing stage only. The projector's own window
+draws the same renderer with no scrim, no outlines and no handles, whatever this is
+set to.
+
 **Points snap to each other.** Drag a control point near a point of another layer,
 near another point of the same layer, or near an edge or centre line of the frame,
 and it lands on it exactly, with a badge naming what it caught. This is not a
@@ -75,21 +94,30 @@ what plays inside it is not. The inspector's **Content** section shows a preview
 the layer and replaces it in place — a photo, a video, or a generated source — leaving
 the quad, the grid, the blend and the audio routing untouched.
 
-**Built-in source library.** Twelve abstract sources, generated on the GPU rather
-than played back from video files:
+**Built-in source library.** Twenty-four abstract sources, generated on the GPU
+rather than played back from video files, on five shelves:
 
-| | | |
-| --- | --- | --- |
-| **Plasma** — flowing colour field | **Clouds** — drifting fractal smoke | **Tunnel** — receding depth |
-| **Kaleidoscope** — mirrored symmetry | **Cells** — organic cracked cells | **Rings** — outward pulses |
-| **Waves** — interfering wavefronts | **Grid** — perspective horizon | **Starfield** — streaming points |
-| **Aurora** — swaying curtains | **Metaballs** — merging blobs | **Strobe** — beat-locked flashes |
+| Shelf | | | |
+| --- | --- | --- | --- |
+| **Washes** — colour over the whole surface | Plasma, Clouds, Waves | Aurora, Metaballs, Liquid | Ripple, Nebula |
+| **Structure** — lines, tiles, symmetry | Grid, Kaleidoscope | Cells, Moiré | Hexes |
+| **Depth** — perspective on a flat wall | Tunnel | Spiral | |
+| **Particles** — discrete points on black | Starfield, Fireflies | Confetti | Rain |
+| **Hits** — built for the beat | Rings, Strobe | Lightning, Sweep | Bars |
 
-Each has a palette (8 ramps), speed, detail size, complexity and variation, and can
+Each has a palette (12 ramps), speed, detail size, complexity and variation, and can
 be driven directly by the music. Because a source is computed rather than decoded,
 it has no resolution limit, never loops, adds nothing to the size of a show, and
 needs no transfer to a second device — a follower phone reproduces it exactly from
-the show clock alone. **Layers → Sources** opens the library.
+the show clock alone. **Layers → Sources** opens the library; the shelf chips and
+the search field narrow it, and search reads the descriptions too, so "beat",
+"columns" or "smoke" finds the thing you remember seeing.
+
+Three of them are worth knowing about before you go looking: **Bars** is a level
+meter that becomes one the moment you feed it audio, **Sweep** uses its Detail
+control as the bar's *angle* rather than as detail, and **Rain**, **Confetti** and
+**Bars** are laid out against the frame rather than around its centre, so they fill
+a tall surface properly instead of being letterboxed into it.
 
 **Manage media.** Import clips and stills from the photo library or the Files app.
 Each show keeps its own copy of its media in its own folder, so a show is

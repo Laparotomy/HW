@@ -220,3 +220,56 @@ final class MusicGateSettingsTests: XCTestCase {
         XCTAssertLessThan(AudioSettings.musicGateHold, 3)
     }
 }
+
+/// What the editing stage draws.
+///
+/// The picture and the mapping get in each other's way: a bright clip swallows a thin
+/// grid line, and grids over every layer hide the thing being judged. These pin the
+/// three answers so a future tweak cannot quietly leave the stage with nothing on it.
+@MainActor
+final class StageDisplayTests: XCTestCase {
+
+    func testContentAloneDrawsNoMapping() {
+        let mode = ShowController.StageDisplay.content
+        XCTAssertFalse(mode.showsGrid)
+        XCTAssertEqual(mode.scrimOpacity, 0, accuracy: 1e-12)
+    }
+
+    /// Grid mode has to knock the picture back, or the lines are invisible over a
+    /// bright clip — which is the case the mode exists for.
+    func testGridModeDimsThePictureBehindIt() {
+        let mode = ShowController.StageDisplay.grid
+        XCTAssertTrue(mode.showsGrid)
+        XCTAssertGreaterThan(mode.scrimOpacity, 0.5)
+        XCTAssertLessThan(mode.scrimOpacity, 1)
+    }
+
+    /// Both is the working default, so it must not dim anything: what you see has to
+    /// be what the projector puts on the wall.
+    func testBothShowsTheMappingOverAnUndimmedPicture() {
+        let mode = ShowController.StageDisplay.both
+        XCTAssertTrue(mode.showsGrid)
+        XCTAssertEqual(mode.scrimOpacity, 0, accuracy: 1e-12)
+    }
+
+    func testEveryModeIsLabelledForThePicker() {
+        var names = Set<String>()
+        var symbols = Set<String>()
+        for mode in ShowController.StageDisplay.allCases {
+            XCTAssertFalse(mode.displayName.isEmpty, mode.rawValue)
+            XCTAssertFalse(mode.symbolName.isEmpty, mode.rawValue)
+            names.insert(mode.displayName)
+            symbols.insert(mode.symbolName)
+        }
+        // The expanded stage picks between these by icon alone.
+        XCTAssertEqual(names.count, ShowController.StageDisplay.allCases.count)
+        XCTAssertEqual(symbols.count, ShowController.StageDisplay.allCases.count)
+    }
+
+    /// Exactly one mode hides the mapping. If two did, the switch would have a dead
+    /// position in it.
+    func testOnlyOneModeHidesTheMapping() {
+        let hidden = ShowController.StageDisplay.allCases.filter { !$0.showsGrid }
+        XCTAssertEqual(hidden, [.content])
+    }
+}

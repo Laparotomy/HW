@@ -13,21 +13,78 @@ final class GeneratorLibraryTests: XCTestCase {
     }
 
     /// Zero is the shader's "this layer is media-backed" sentinel, so no generator
-    /// may claim it, and the dispatch switch only covers 1...12.
+    /// may claim it, and anything past the dispatch switch falls through to black.
     func testShaderIndicesAreInsideTheDispatchRange() {
         for kind in GeneratorKind.allCases {
             XCTAssertGreaterThanOrEqual(kind.shaderIndex, 1, "\(kind.rawValue)")
-            XCTAssertLessThanOrEqual(kind.shaderIndex, 12, "\(kind.rawValue)")
+            XCTAssertLessThanOrEqual(kind.shaderIndex, GeneratorKind.highestShaderIndex,
+                                     "\(kind.rawValue)")
         }
     }
 
+    /// The indices have to run 1...n with no gaps, because `highestShaderIndex` is
+    /// what the shader's switch is written against. A kind added without a case would
+    /// draw black, and nothing but this would say so.
+    func testTheIndicesAreContiguousFromOne() {
+        let indices = GeneratorKind.allCases.map(\.shaderIndex).sorted()
+        let expected = (1...GeneratorKind.allCases.count).map(Float.init)
+        XCTAssertEqual(indices, expected)
+        XCTAssertEqual(GeneratorKind.highestShaderIndex,
+                       Float(GeneratorKind.allCases.count))
+    }
+
     func testEveryPaletteHasADistinctShaderIndex() {
-        let indices = GeneratorPalette.allCases.map(\.shaderIndex)
+        let indices = GeneratorPalette.allCases.map(\.shaderIndex).sorted()
         XCTAssertEqual(Set(indices).count, GeneratorPalette.allCases.count)
-        for index in indices {
-            XCTAssertGreaterThanOrEqual(index, 0)
-            XCTAssertLessThanOrEqual(index, 7)
+        // Palettes start at zero: index 0 is the greyscale ramp, not a sentinel.
+        XCTAssertEqual(indices, (0..<GeneratorPalette.allCases.count).map(Float.init))
+        XCTAssertEqual(GeneratorPalette.highestShaderIndex,
+                       Float(GeneratorPalette.allCases.count - 1))
+    }
+
+    /// Every kind sits on exactly one shelf, and every shelf holds something. An
+    /// empty shelf is a heading with nothing under it; a kind on no shelf cannot be
+    /// reached from the browser at all, however well it renders.
+    func testTheShelvesPartitionTheLibrary() {
+        let shelved = GeneratorFamily.allCases.flatMap(\.kinds)
+        XCTAssertEqual(shelved.count, GeneratorKind.allCases.count)
+        XCTAssertEqual(Set(shelved), Set(GeneratorKind.allCases))
+        for family in GeneratorFamily.allCases {
+            XCTAssertFalse(family.kinds.isEmpty, family.rawValue)
+            XCTAssertFalse(family.displayName.isEmpty, family.rawValue)
+            XCTAssertFalse(family.detail.isEmpty, family.rawValue)
+            XCTAssertFalse(family.symbolName.isEmpty, family.rawValue)
         }
+    }
+
+    /// The library is big enough now that the browser groups it; that grouping is
+    /// only worth its complexity while no shelf is a dumping ground.
+    func testNoShelfHoldsMoreThanHalfTheLibrary() {
+        for family in GeneratorFamily.allCases {
+            XCTAssertLessThanOrEqual(family.kinds.count, GeneratorKind.allCases.count / 2,
+                                     family.rawValue)
+        }
+    }
+
+    /// A source that sits dark between beats renders as a black rectangle in the
+    /// browser unless the preview drives it.
+    func testBeatDrivenSourcesArePreviewedLit() {
+        for kind in GeneratorKind.allCases {
+            XCTAssertGreaterThan(kind.previewDrive, 0, "\(kind.rawValue)")
+            XCTAssertLessThanOrEqual(kind.previewDrive, 1, "\(kind.rawValue)")
+            if kind.family == .hits {
+                XCTAssertGreaterThanOrEqual(kind.previewDrive, 0.8, "\(kind.rawValue)")
+            }
+        }
+    }
+
+    /// Names are what the browser lists and what a layer is called when it is added,
+    /// so two sources sharing one would be indistinguishable in the layer list.
+    func testEveryKindHasADistinctName() {
+        let names = GeneratorKind.allCases.map(\.displayName)
+        XCTAssertEqual(Set(names).count, names.count)
+        let paletteNames = GeneratorPalette.allCases.map(\.displayName)
+        XCTAssertEqual(Set(paletteNames).count, paletteNames.count)
     }
 
     func testEveryKindIsDescribedForTheBrowser() {

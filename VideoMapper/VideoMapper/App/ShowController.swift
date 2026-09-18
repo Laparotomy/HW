@@ -38,6 +38,14 @@ final class ShowController: ObservableObject {
     /// behaves under your finger, not what the projector puts on the wall, and a
     /// follower device has no reason to inherit it.
     @Published var snapsPoints = true
+    /// What the editing stage draws. An editing preference, like `snapsPoints`: the
+    /// projector's own window never draws handles whatever this says.
+    @Published var stageDisplay: StageDisplay = .both
+    /// Whether the unselected layers show their outline and grid too.
+    ///
+    /// On by default because a mapping is a set of surfaces that have to meet, and
+    /// you cannot line one up against its neighbour while the neighbour is invisible.
+    @Published var showsAllLayerGrids = true
     /// True while the show is held still waiting for music. Deliberately not
     /// published — like `showTime` it changes on the frame clock, and the transport
     /// read-out already polls at a rate a human can see.
@@ -47,6 +55,43 @@ final class ShowController: ObservableObject {
         case move, warp
         var id: String { rawValue }
         var displayName: String { self == .move ? "Move" : "Warp" }
+    }
+
+    /// What the editing stage shows: the picture, the mapping, or both.
+    ///
+    /// The two get in each other's way. A bright clip makes a thin accent-coloured
+    /// grid line invisible, and a grid drawn over every layer at once hides the thing
+    /// you are judging. Neither is a problem the drawing can solve — they are two
+    /// different questions about the same stage, so this answers one at a time.
+    enum StageDisplay: String, CaseIterable, Identifiable {
+        /// The projector's picture, with nothing drawn over it.
+        case content
+        /// The mapping, over a dimmed picture.
+        case grid
+        /// Both, which is the useful default while building a show.
+        case both
+
+        var id: String { rawValue }
+
+        var displayName: String {
+            switch self {
+            case .content: return "Content"
+            case .grid: return "Grid"
+            case .both: return "Both"
+            }
+        }
+
+        var symbolName: String {
+            switch self {
+            case .content: return "photo"
+            case .grid: return "grid"
+            case .both: return "square.on.square"
+            }
+        }
+
+        var showsGrid: Bool { self != .content }
+        /// How far the picture is knocked back so the lines read over it.
+        var scrimOpacity: Double { self == .grid ? 0.72 : 0 }
     }
 
     let audio = AudioEngineController()

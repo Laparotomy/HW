@@ -305,6 +305,15 @@ struct InspectorPanel: View {
                 .font(.caption)
                 .foregroundStyle(.secondary)
 
+            Text("""
+                 The stage draws every visible layer's grid, not just this one, so \
+                 neighbouring surfaces can be lined up against each other. The \
+                 Content / Grid / Both switch beside the transport picks whether you \
+                 are looking at the picture, the mapping, or both at once.
+                 """)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
             Toggle("Snap to nearby points", isOn: $controller.snapsPoints)
             Text("""
                  A dragged point lands exactly on a point of another layer, on \

@@ -299,6 +299,25 @@ shape and look; a generator wants the audio inside the pattern, so
 separate envelope per layer for it. A beat-locked strobe is then a picker away
 instead of a routing exercise.
 
+## The stage answers one question at a time
+
+The picture and the mapping compete for the same pixels. A bright clip swallows a
+thin accent-coloured grid line, and a grid drawn over every layer at once hides the
+thing being judged. No amount of care in the drawing fixes that — they are two
+different questions about the same stage — so the stage answers one at a time:
+content, grid, or both.
+
+Grid mode dims the picture with a scrim, and the scrim is a **SwiftUI overlay on the
+editing stage**, not a change to the render frame. That matters: `OutputView` puts
+the same `MetalStageView` on the projector, so anything written into the frame would
+reach the wall. Dimming in the view hierarchy cannot.
+
+Every visible layer draws its outline and grid, the unselected ones at 42% — surfaces
+that have to meet on a wall cannot be aligned against each other while only one of
+them is drawn. Handles stay on the selected layer alone, because the drag hit-test
+only resolves points on that layer, and a dot that looks draggable and is not is
+worse than no dot.
+
 ## Video is slaved, not just played
 
 `VideoTextureSource` does not simply call `play()`. Every frame it compares the
@@ -409,6 +428,13 @@ layer — the mapping stays visible so the operator can see what is absent.
   layers are exempt — they carry no media at all.
 - Generators are fill-rate bound. A stack of several full-canvas generators on an
   older device will cost frames where the same stack of video layers would not.
+  Nebula, Liquid and Clouds are the expensive ones — they each evaluate fractal
+  noise several times per pixel — and Fireflies walks nine lattice cells. Strobe,
+  Sweep and Moiré are nearly free.
+- A generator's shader index is a position in a `switch`, so the indices must stay
+  contiguous from 1 and must never be renumbered: projects store the kind by name,
+  but a stale index in a running shader draws the wrong pattern silently rather than
+  failing. `GeneratorKind.highestShaderIndex` and a test pin the contract.
 - The host is authoritative. A follower can edit locally, but the next host broadcast
   replaces its project.
 - Beat detection is unreliable on sparse or heavily rubato music.

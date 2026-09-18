@@ -12,22 +12,29 @@ struct GeneratorBrowser: View {
     var replacingLayerID: UUID?
     @Environment(\.dismiss) private var dismiss
 
+    /// Nil shows every shelf at once, which is how you browse; a family shows one,
+    /// which is how you find the thing you already had in mind.
+    @State private var family: GeneratorFamily?
+    @State private var search = ""
+
     private let columns = [GridItem(.adaptive(minimum: 150), spacing: 12)]
 
     var body: some View {
         NavigationStack {
             ScrollView {
-                LazyVGrid(columns: columns, spacing: 12) {
-                    ForEach(GeneratorKind.allCases) { kind in
-                        Button {
-                            pick(kind)
-                        } label: {
-                            cell(for: kind)
+                shelfPicker
+
+                if matches.isEmpty {
+                    ContentUnavailableView.search(text: search)
+                        .padding(.top, 40)
+                } else {
+                    ForEach(shownFamilies) { shelf in
+                        let kinds = matches.filter { $0.family == shelf }
+                        if !kinds.isEmpty {
+                            section(shelf, kinds: kinds)
                         }
-                        .buttonStyle(.plain)
                     }
                 }
-                .padding()
 
                 Text("""
                      Sources are generated on the GPU, so they have no resolution \
@@ -38,8 +45,10 @@ struct GeneratorBrowser: View {
                     .font(.footnote)
                     .foregroundStyle(.secondary)
                     .padding(.horizontal)
+                    .padding(.top, 8)
                     .padding(.bottom, 24)
             }
+            .searchable(text: $search, prompt: "Find a source")
             .navigationTitle(replacingLayerID == nil ? "Sources" : "Fill Layer")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -47,6 +56,87 @@ struct GeneratorBrowser: View {
                     Button("Cancel") { dismiss() }
                 }
             }
+        }
+    }
+
+    // MARK: - Filtering
+
+    /// Searching looks at the description as well as the name, because what you
+    /// remember about a source is usually what it looked like — "columns", "beat",
+    /// "smoke" — and not what it was called.
+    private var matches: [GeneratorKind] {
+        let query = search.trimmingCharacters(in: .whitespaces).lowercased()
+        return GeneratorKind.allCases.filter { kind in
+            guard family == nil || kind.family == family else { return false }
+            guard !query.isEmpty else { return true }
+            return kind.displayName.lowercased().contains(query)
+                || kind.detail.lowercased().contains(query)
+                || kind.family.displayName.lowercased().contains(query)
+        }
+    }
+
+    private var shownFamilies: [GeneratorFamily] {
+        if let family { return [family] }
+        return GeneratorFamily.allCases
+    }
+
+    // MARK: - Pieces
+
+    private var shelfPicker: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 8) {
+                chip(title: "All", symbol: "square.grid.2x2", isOn: family == nil) {
+                    family = nil
+                }
+                ForEach(GeneratorFamily.allCases) { shelf in
+                    chip(title: shelf.displayName, symbol: shelf.symbolName,
+                         isOn: family == shelf) {
+                        family = family == shelf ? nil : shelf
+                    }
+                }
+            }
+            .padding(.horizontal)
+            .padding(.top, 4)
+        }
+    }
+
+    private func chip(title: String, symbol: String, isOn: Bool,
+                      action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Label(title, systemImage: symbol)
+                .font(.footnote.weight(.medium))
+                .padding(.horizontal, 11)
+                .padding(.vertical, 6)
+                .background(Capsule().fill(isOn ? Color.accentColor : Color.secondary.opacity(0.15)))
+                .foregroundStyle(isOn ? Color.white : Color.primary)
+        }
+        .buttonStyle(.plain)
+        .accessibilityAddTraits(isOn ? [.isButton, .isSelected] : .isButton)
+    }
+
+    private func section(_ shelf: GeneratorFamily, kinds: [GeneratorKind]) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(shelf.displayName)
+                    .font(.headline)
+                Text(shelf.detail)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            .padding(.horizontal)
+            .padding(.top, 12)
+
+            LazyVGrid(columns: columns, spacing: 12) {
+                ForEach(kinds) { kind in
+                    Button {
+                        pick(kind)
+                    } label: {
+                        cell(for: kind)
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+            .padding(.horizontal)
         }
     }
 
