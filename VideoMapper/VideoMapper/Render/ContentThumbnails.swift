@@ -59,8 +59,15 @@ final class ContentThumbnailStore: ObservableObject {
     /// Returns a preview if one is ready, and starts decoding if not.
     ///
     /// Deliberately synchronous-with-a-nil: SwiftUI calls this from `body`, so it has
-    /// to answer immediately. The published dictionary re-renders the view when the
-    /// real image lands.
+    /// to answer immediately. The published dictionary re-renders the view when a
+    /// decoded image lands.
+    ///
+    /// That last part is also the constraint this method has to respect: **it is
+    /// called during a view update, so it must never write `images`.** Publishing a
+    /// change from inside `body` is undefined behaviour in SwiftUI, and it reports it
+    /// at runtime rather than at build time — which is why nothing here caught it
+    /// until a generator layer was actually on screen. Every write to `images`
+    /// happens on a later turn of the main actor, from `load`.
     func image(for content: LayerContent, projectID: UUID) -> CGImage? {
         guard let key = Self.signature(for: content) else { return nil }
         if let ready = images[key] { return ready }
@@ -70,12 +77,12 @@ final class ContentThumbnailStore: ObservableObject {
             return nil
         case .generator(let kind, let settings):
             // Generated on the GPU in well under a frame, so there is no reason to
-            // make the caller wait a render pass for it.
-            guard let image = GeneratorThumbnailRenderer.shared.image(for: kind,
-                                                                     palette: settings.palette)
-            else { return nil }
-            images[key] = image
-            return image
+            // make the caller wait a render pass for it — and no reason to cache it
+            // here either: the renderer keeps its own cache under the same key, so a
+            // second copy in a published dictionary would buy nothing and would have
+            // to be written during `body` to do it.
+            return GeneratorThumbnailRenderer.shared.image(for: kind,
+                                                           palette: settings.palette)
         case .image(let ref), .video(let ref, _):
             load(ref: ref, key: key, projectID: projectID)
             return nil
