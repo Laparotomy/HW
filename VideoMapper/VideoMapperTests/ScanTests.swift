@@ -471,6 +471,28 @@ final class CanvasPresetTests: XCTestCase {
         XCTAssertNil(CanvasPreset.validate(width: -10, height: 100))
         XCTAssertNil(CanvasPreset.validate(width: 1e9, height: 100))
         XCTAssertNil(CanvasPreset.validate(width: .nan, height: 100))
+        XCTAssertNil(CanvasPreset.validate(width: .infinity, height: 100))
+    }
+
+    /// The bounds are inclusive. A limit that rejected its own value would leave a
+    /// size the error message tells you to type and the field will not take.
+    func testTheBoundsThemselvesAreAccepted() {
+        XCTAssertNotNil(CanvasPreset.validate(width: CanvasPreset.minimumSide,
+                                              height: CanvasPreset.minimumSide))
+        XCTAssertNotNil(CanvasPreset.validate(width: CanvasPreset.maximumSide,
+                                              height: CanvasPreset.maximumSide))
+    }
+
+    /// A projector turned on its side to light a doorway or a column is a normal
+    /// thing to do, so the one-tap list has to reach past widescreen.
+    func testTheShelfCoversPortraitAndSquareAsWellAsWidescreen() {
+        let aspects = CanvasPreset.allCases.compactMap(\.size).map { $0.width / $0.height }
+        XCTAssertTrue(aspects.contains { $0 < 1 }, "no portrait preset")
+        XCTAssertTrue(aspects.contains { $0 == 1 }, "no square preset")
+        XCTAssertTrue(aspects.contains { $0 > 1.7 }, "no widescreen preset")
+        for preset in CanvasPreset.allCases {
+            XCTAssertFalse(preset.displayName.isEmpty, preset.rawValue)
+        }
     }
 
     func testValidationRoundsAcceptableSizes() {
