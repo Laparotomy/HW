@@ -15,8 +15,20 @@ final class ProjectStore {
 
     private let log = Logger(subsystem: "app.videomapper", category: "ProjectStore")
     private let fileManager = FileManager.default
+    /// Where shows live, when it is not the Documents directory.
+    ///
+    /// Only the tests pass this. The alternative was to test the real store against
+    /// the real Documents folder, which would leave shows behind in whatever app
+    /// hosts the tests — and a store that deletes folders is the last thing to point
+    /// at a directory it does not own.
+    private let rootOverride: URL?
+
+    init(root: URL? = nil) {
+        rootOverride = root
+    }
 
     private var showsRoot: URL {
+        if let rootOverride { return rootOverride }
         let docs = fileManager.urls(for: .documentDirectory, in: .userDomainMask)[0]
         return docs.appendingPathComponent("Shows", isDirectory: true)
     }

@@ -115,8 +115,8 @@ final class ShowController: ObservableObject {
     private var hostTransport: TransportSnapshot?
     private var lastBroadcast: Double = 0
     private var lastFollowerAudioCheck: Double = 0
-    /// Last moment the analyser heard something above the gate.
-    private var lastAudibleTime: Double = -.greatestFiniteMagnitude
+    /// Decides whether the show is allowed to move, in "only while music plays".
+    private var musicGate = MusicGate()
 
     // MARK: - Init
 
@@ -275,7 +275,8 @@ final class ShowController: ObservableObject {
 
         guard isPlaying else { return }
 
-        if audio.features.level > project.audio.musicGateLevel { lastAudibleTime = HostClock.now }
+        musicGate.observe(level: audio.features.level,
+                          threshold: project.audio.musicGateLevel, at: HostClock.now)
         let holding = project.audio.animateOnlyWithMusic && !musicIsSounding
         if isWaitingForMusic != holding { isWaitingForMusic = holding }
         if holding {
@@ -301,17 +302,10 @@ final class ShowController: ObservableObject {
     /// louder than its own floor" — hence a gate the operator can set by eye against
     /// the live meter, and a hold so a break in the music is not a break in the show.
     var musicIsSounding: Bool {
-        switch project.audio.clockSource {
-        // Free-run has no music to wait for, and the analyser is not even running,
-        // so gating here could only ever freeze the show for good.
-        case .freeRun: return true
-        case .track: return audio.hasTrack ? audio.isPlaying : heardMusicRecently
-        case .listen: return heardMusicRecently
-        }
-    }
-
-    private var heardMusicRecently: Bool {
-        HostClock.now - lastAudibleTime < AudioSettings.musicGateHold
+        musicGate.isSounding(clock: project.audio.clockSource,
+                             hasTrack: audio.hasTrack,
+                             trackIsPlaying: audio.isPlaying,
+                             at: HostClock.now)
     }
 
     /// Whether holding for music can do anything in the current clock source.
@@ -649,6 +643,7 @@ final class ShowController: ObservableObject {
         anchorShowTime = 0
         anchorLocalTime = HostClock.now
         modulation.reset()
+        musicGate.reset()
         project = newProject
         selectedLayerID = newProject.layers.first?.id
         try? store.prepareFolders(for: newProject.id)

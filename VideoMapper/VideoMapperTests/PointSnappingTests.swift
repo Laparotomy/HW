@@ -273,3 +273,126 @@ final class StageDisplayTests: XCTestCase {
         XCTAssertEqual(hidden, [.content])
     }
 }
+
+/// Holding the show still until the music starts.
+///
+/// The failure mode is a show that never moves and says nothing about why, so these
+/// walk the gate through the cases that actually happen in a room: a track paused
+/// mid-set, a gap between two tracks, a quiet passage, and a PA that has not started.
+final class MusicGateTests: XCTestCase {
+
+    /// A gate that has heard nothing must read as silent, not as having just gone
+    /// quiet — otherwise a show gated on the microphone would run for one hold
+    /// before freezing, which looks like a crash rather than a setting.
+    func testAGateThatHasHeardNothingIsSilent() {
+        let gate = MusicGate()
+        XCTAssertFalse(gate.heardRecently(at: 0))
+        XCTAssertFalse(gate.heardRecently(at: 1_000_000))
+        XCTAssertFalse(gate.isSounding(clock: .listen, hasTrack: false,
+                                       trackIsPlaying: false, at: 0))
+    }
+
+    func testSomethingAboveTheThresholdCountsAsHeard() {
+        var gate = MusicGate()
+        gate.observe(level: 0.6, threshold: 0.35, at: 10)
+        XCTAssertTrue(gate.heardRecently(at: 10))
+        XCTAssertTrue(gate.isSounding(clock: .listen, hasTrack: false,
+                                      trackIsPlaying: false, at: 10))
+    }
+
+    func testRoomNoiseBelowTheThresholdIsNotMusic() {
+        var gate = MusicGate()
+        gate.observe(level: 0.2, threshold: 0.35, at: 10)
+        XCTAssertFalse(gate.heardRecently(at: 10))
+    }
+
+    /// The threshold is a floor, not a ceiling: exactly at it is still silence, so a
+    /// gate set to the room's own reading does not chatter on and off.
+    func testTheThresholdItselfIsNotEnough() {
+        var gate = MusicGate()
+        gate.observe(level: 0.35, threshold: 0.35, at: 10)
+        XCTAssertFalse(gate.heardRecently(at: 10))
+    }
+
+    /// A break between two phrases, or the half-second a DJ spends cutting the bass,
+    /// must not freeze and restart the show.
+    func testTheShowKeepsRunningThroughAShortGap() {
+        var gate = MusicGate(hold: 0.8)
+        gate.observe(level: 1, threshold: 0.35, at: 10)
+        gate.observe(level: 0, threshold: 0.35, at: 10.5)
+        XCTAssertTrue(gate.heardRecently(at: 10.5))
+        XCTAssertTrue(gate.heardRecently(at: 10.79))
+    }
+
+    func testTheShowStopsOnceTheHoldRunsOut() {
+        var gate = MusicGate(hold: 0.8)
+        gate.observe(level: 1, threshold: 0.35, at: 10)
+        XCTAssertFalse(gate.heardRecently(at: 10.8))
+        XCTAssertFalse(gate.heardRecently(at: 12))
+    }
+
+    func testEachSoundRestartsTheHold() {
+        var gate = MusicGate(hold: 0.8)
+        gate.observe(level: 1, threshold: 0.35, at: 10)
+        gate.observe(level: 1, threshold: 0.35, at: 10.6)
+        // Without the restart this would already be past the hold from t = 10.
+        XCTAssertTrue(gate.heardRecently(at: 11.2))
+    }
+
+    // MARK: - Per clock source
+
+    /// Free run has no music to wait for, and its analyser is not even running.
+    /// Gating there could only ever freeze the show for good.
+    func testFreeRunIsNeverGated() {
+        let gate = MusicGate()
+        XCTAssertTrue(gate.isSounding(clock: .freeRun, hasTrack: false,
+                                      trackIsPlaying: false, at: 0))
+        XCTAssertTrue(gate.isSounding(clock: .freeRun, hasTrack: true,
+                                      trackIsPlaying: false, at: 10_000))
+    }
+
+    /// With a file loaded the answer is exact, and it does not depend on what the
+    /// microphone can hear — a show run from a phone on a stand, in a loud room,
+    /// must not be told its own paused track is playing.
+    func testALoadedTrackAnswersFromTheTransport() {
+        var gate = MusicGate()
+        gate.observe(level: 1, threshold: 0.35, at: 10)
+
+        XCTAssertTrue(gate.isSounding(clock: .track, hasTrack: true,
+                                      trackIsPlaying: true, at: 10))
+        XCTAssertFalse(gate.isSounding(clock: .track, hasTrack: true,
+                                       trackIsPlaying: false, at: 10))
+    }
+
+    /// The Track clock with no file loaded is someone who has chosen it and not got
+    /// there yet. Falling back to the microphone is better than freezing outright.
+    func testTheTrackClockFallsBackToTheMicrophoneWithNoFile() {
+        var gate = MusicGate()
+        gate.observe(level: 1, threshold: 0.35, at: 10)
+        XCTAssertTrue(gate.isSounding(clock: .track, hasTrack: false,
+                                      trackIsPlaying: false, at: 10))
+        XCTAssertFalse(gate.isSounding(clock: .track, hasTrack: false,
+                                       trackIsPlaying: false, at: 99))
+    }
+
+    func testListenAlwaysAnswersFromTheMicrophone() {
+        var gate = MusicGate()
+        gate.observe(level: 1, threshold: 0.35, at: 10)
+        // Even with a file loaded and playing: Listen means the room is the source.
+        XCTAssertTrue(gate.isSounding(clock: .listen, hasTrack: true,
+                                      trackIsPlaying: false, at: 10))
+        XCTAssertFalse(gate.isSounding(clock: .listen, hasTrack: true,
+                                       trackIsPlaying: true, at: 99))
+    }
+
+    func testResettingForgetsWhatItHeard() {
+        var gate = MusicGate()
+        gate.observe(level: 1, threshold: 0.35, at: 10)
+        gate.reset()
+        XCTAssertFalse(gate.heardRecently(at: 10))
+    }
+
+    func testTheDefaultHoldIsTheOneTheSettingsPublish() {
+        XCTAssertEqual(MusicGate().hold, AudioSettings.musicGateHold, accuracy: 1e-12)
+    }
+}
