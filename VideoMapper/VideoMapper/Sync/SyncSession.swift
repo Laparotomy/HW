@@ -185,10 +185,15 @@ final class SyncSession: NSObject, ObservableObject {
         case .pong(let id, _, let t1):
             guard role == .follower else { return true }
             clock.noteReply(id: id, hostTime: t1, localNow: HostClock.now)
-            // One read, so the three published values always describe the same sample.
-            let estimate = clock.snapshot()
             DispatchQueue.main.async { [weak self] in
                 guard let self else { return }
+                // Read here rather than on the network queue: `teardown` resets the
+                // clock and zeroes these three on main, and a sample taken before
+                // that reset would otherwise land afterwards and leave the panel
+                // reading Locked for a session that has already gone. One
+                // `snapshot()` rather than three reads, so the values still all
+                // describe the same moment.
+                let estimate = self.clock.snapshot()
                 self.clockOffset = estimate.offset
                 self.roundTrip = estimate.roundTrip
                 self.isSynchronized = estimate.isSynchronized
