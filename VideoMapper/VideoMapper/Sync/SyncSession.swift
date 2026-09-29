@@ -185,11 +185,13 @@ final class SyncSession: NSObject, ObservableObject {
         case .pong(let id, _, let t1):
             guard role == .follower else { return true }
             clock.noteReply(id: id, hostTime: t1, localNow: HostClock.now)
+            // One read, so the three published values always describe the same sample.
+            let estimate = clock.snapshot()
             DispatchQueue.main.async { [weak self] in
                 guard let self else { return }
-                self.clockOffset = self.clock.offset
-                self.roundTrip = self.clock.roundTrip
-                self.isSynchronized = self.clock.isSynchronized
+                self.clockOffset = estimate.offset
+                self.roundTrip = estimate.roundTrip
+                self.isSynchronized = estimate.isSynchronized
             }
             return true
         default:
