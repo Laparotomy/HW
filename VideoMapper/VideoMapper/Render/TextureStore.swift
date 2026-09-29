@@ -62,6 +62,10 @@ final class TextureStore {
                 video.update(playback: playback)
             }
 
+            // The renderer only ever calls `texture` for visible layers, so this is
+            // the one place that knows a layer has just been hidden.
+            sources[layer.id]?.setVisible(layer.isVisible)
+
             if let image = layer.appearance.texture.image, overlays[image.id] == nil {
                 let url = store.mediaURL(for: image, projectID: project.id)
                 overlays[image.id] = ImageTextureSource(url: url, device: device)

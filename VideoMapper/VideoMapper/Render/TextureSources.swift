@@ -10,6 +10,18 @@ protocol TextureSource: AnyObject {
     /// Advances internal state (video decoding, drift correction) and returns the
     /// texture to draw, or nil to skip the layer this frame.
     func texture(showTime: Double, isPlaying: Bool) -> MTLTexture?
+
+    /// Tells the source whether its layer is being drawn.
+    ///
+    /// A source only ever hears from the renderer through `texture`, and the
+    /// renderer skips hidden layers — so without this a hidden source has no way
+    /// of knowing it should stop working.
+    func setVisible(_ isVisible: Bool)
+}
+
+extension TextureSource {
+    /// Sources that hold no running work have nothing to stop.
+    func setVisible(_ isVisible: Bool) {}
 }
 
 /// 1x1 white pixel, used by colour layers so solids share the media pipeline.
@@ -98,6 +110,22 @@ final class VideoTextureSource: TextureSource {
         self.playback = playback
         player.volume = Float(playback.volume)
         player.isMuted = playback.volume <= 0
+    }
+
+    /// Stops the player while the layer is hidden.
+    ///
+    /// `syncTransport` is only reachable through `texture`, which the renderer
+    /// calls for visible layers alone. A layer hidden mid-clip would otherwise keep
+    /// decoding — and keep sounding, if its volume had been raised — until it was
+    /// shown again or deleted. Hiding can also happen on its own through a
+    /// modulation route, so nobody need have touched the eye.
+    ///
+    /// Only the pause is done here. Resuming is left to `syncTransport` on the next
+    /// frame the layer is drawn, which already knows where in the clip the show
+    /// clock wants to be.
+    func setVisible(_ isVisible: Bool) {
+        guard !isVisible else { return }
+        if player.rate != 0 { player.pause() }
     }
 
     /// Where in the clip the show clock says we should be.
