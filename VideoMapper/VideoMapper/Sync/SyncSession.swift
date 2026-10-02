@@ -51,7 +51,16 @@ final class SyncSession: NSObject, ObservableObject {
 
     private let log = Logger(subsystem: "app.videomapper", category: "Sync")
     private let localPeerID: MCPeerID
-    private var session: MCSession?
+    /// Guards the two pieces of state the Multipeer queues read while the main
+    /// thread writes them: the role and the session reference. Not recursive,
+    /// so nothing taken under it may take it again.
+    private let stateLock = NSLock()
+    private var storedRole: SyncRole = .solo
+    private var storedSession: MCSession?
+    private var session: MCSession? {
+        get { stateLock.lock(); defer { stateLock.unlock() }; return storedSession }
+        set { stateLock.lock(); storedSession = newValue; stateLock.unlock() }
+    }
     private var advertiser: MCNearbyServiceAdvertiser?
     private var browser: MCNearbyServiceBrowser?
     private var probeTimer: Timer?
@@ -70,6 +79,12 @@ final class SyncSession: NSObject, ObservableObject {
 
     var localName: String { localPeerID.displayName }
 
+    /// The role as the Multipeer queues see it. `role` is `@Published`, so it is
+    /// written on main and must not be read from another thread.
+    private var currentRole: SyncRole {
+        stateLock.lock(); defer { stateLock.unlock() }; return storedRole
+    }
+
     var connectedPeers: [MCPeerID] { session?.connectedPeers ?? [] }
 
     // MARK: - Lifecycle
@@ -77,6 +92,9 @@ final class SyncSession: NSObject, ObservableObject {
     func setRole(_ newRole: SyncRole) {
         guard newRole != role else { return }
         teardown()
+        stateLock.lock()
+        storedRole = newRole
+        stateLock.unlock()
         role = newRole
         switch newRole {
         case .solo:
@@ -155,7 +173,7 @@ final class SyncSession: NSObject, ObservableObject {
         // that tracks drift without flooding the link.
         probeTimer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] timer in
             guard let self else { timer.invalidate(); return }
-            guard self.role == .follower, let session = self.session,
+            guard self.currentRole == .follower, let session = self.session,
                   !session.connectedPeers.isEmpty else { return }
             if self.probesSent > 10, self.probesSent % 5 != 0 {
                 self.probesSent += 1
@@ -179,11 +197,11 @@ final class SyncSession: NSObject, ObservableObject {
     private func handleClockMessage(_ message: SyncMessage, from peer: MCPeerID) -> Bool {
         switch message {
         case .ping(let id, let t0):
-            guard role == .host else { return true }
+            guard currentRole == .host else { return true }
             send(.pong(id: id, t0: t0, t1: HostClock.now), to: peer)
             return true
         case .pong(let id, _, let t1):
-            guard role == .follower else { return true }
+            guard currentRole == .follower else { return true }
             clock.noteReply(id: id, hostTime: t1, localNow: HostClock.now)
             DispatchQueue.main.async { [weak self] in
                 guard let self else { return }
@@ -218,8 +236,8 @@ extension SyncSession: MCSessionDelegate {
     func session(_ session: MCSession, peer peerID: MCPeerID, didChange state: MCSessionState) {
         refreshPeers()
         guard state == .connected else { return }
-        send(.hello(name: localPeerID.displayName, isHost: role == .host), to: peerID)
-        if role == .follower {
+        send(.hello(name: localPeerID.displayName, isHost: currentRole == .host), to: peerID)
+        if currentRole == .follower {
             // Get a first estimate immediately rather than waiting for the timer.
             sendProbe()
         }
