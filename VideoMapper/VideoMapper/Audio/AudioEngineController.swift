@@ -70,6 +70,13 @@ final class AudioEngineController: ObservableObject {
     private var loops = true
     private var tappedNode: AVAudioNode?
     private var analysisTime: Double = 0
+    /// Wall-clock reading that `analysisTime` zero corresponds to.
+    ///
+    /// Re-anchored on every analysed window, so `HostClock.now - analysisEpoch`
+    /// agrees with `analysisTime` while analysis runs and keeps advancing on its own
+    /// when it does not. That is what lets a manual tap land on the same timebase as
+    /// a detected onset.
+    private var analysisEpoch: Double = HostClock.now
 
     init() {
         engine.attach(player)
@@ -149,7 +156,14 @@ final class AudioEngineController: ObservableObject {
 
         let sampleRate = file.processingFormat.sampleRate
         let startFrame = AVAudioFramePosition(max(0, position) * sampleRate)
-        guard startFrame < file.length else { return }
+        // Asked to start at or past the end there is nothing to schedule. Report it
+        // as stopped: `player.stop()` above already silenced the node, so leaving
+        // `isPlaying` as it was would show a running transport over silence.
+        guard startFrame < file.length else {
+            startPosition = duration
+            setPlaying(false)
+            return
+        }
         let frameCount = AVAudioFrameCount(file.length - startFrame)
 
         startPosition = max(0, position)
@@ -284,6 +298,7 @@ final class AudioEngineController: ObservableObject {
         guard let spectrum = analyzer.process(buffer: buffer, sampleRate: sampleRate) else { return }
         // One hop of samples has elapsed since the last window.
         analysisTime += 1024 / sampleRate
+        analysisEpoch = HostClock.now - analysisTime
         beats.process(flux: spectrum.flux, at: analysisTime)
         let bpm = beats.bpm
         let beat = beats.beatEnvelope
@@ -308,7 +323,13 @@ final class AudioEngineController: ObservableObject {
     }
 
     /// Registers a manual tap-tempo hit.
+    ///
+    /// Timed off the wall clock rather than off `analysisTime` directly, because
+    /// `analysisTime` only advances while an analysis tap is installed — which is
+    /// exactly what tap tempo is for the absence of. Against a frozen timebase every
+    /// tap landed on the same instant, so no interval was ever measured and the
+    /// tempo never moved.
     func tapTempo() {
-        beats.tap(at: analysisTime)
+        beats.tap(at: HostClock.now - analysisEpoch)
     }
 }
