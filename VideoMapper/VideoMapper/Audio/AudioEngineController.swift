@@ -70,6 +70,9 @@ final class AudioEngineController: ObservableObject {
     private var loops = true
     private var tappedNode: AVAudioNode?
     private var analysisTime: Double = 0
+    /// Guards the analyser and the beat tracker, which the audio thread drives and
+    /// the main thread resets. See `analyse` for why that overlap is possible.
+    private let analysisLock = NSLock()
 
     init() {
         engine.attach(player)
@@ -120,6 +123,7 @@ final class AudioEngineController: ObservableObject {
         file = nil
         duration = 0
         trackTitle = nil
+        clearFeaturesIfIdle()
     }
 
     var hasTrack: Bool { file != nil }
@@ -235,9 +239,10 @@ final class AudioEngineController: ObservableObject {
                     self.engine.prepare()
                     try self.engine.start()
                 }
+                // `installAnalysisTap` resets the tracker for us, before the tap that
+                // would otherwise be writing to it is installed.
                 self.installAnalysisTap(on: input)
                 self.isListening = true
-                self.beats.reset()
             } catch {
                 self.log.error("Listen mode failed: \(error.localizedDescription, privacy: .public)")
                 self.lastError = "Listen mode failed: \(error.localizedDescription)"
@@ -250,6 +255,7 @@ final class AudioEngineController: ObservableObject {
         removeTap()
         configureSession(listening: false)
         if isPlaying { installAnalysisTap(on: engine.mainMixerNode) }
+        clearFeaturesIfIdle()
     }
 
     private func requestRecordPermission() async -> Bool {
@@ -267,6 +273,17 @@ final class AudioEngineController: ObservableObject {
     private func installAnalysisTap(on node: AVAudioNode) {
         if tappedNode === node { return }
         removeTap()
+        // A new run starts from silence. The analyser measures flux against the
+        // previous window and the tracker holds intervals measured from onsets that
+        // may be minutes old, so carried across a stop the first window of the next
+        // run reads as one enormous onset against whatever was playing before.
+        // Done here, as the old tap comes off and before the new one goes on, under
+        // the lock because `removeTap(onBus:)` does not promise the block it just
+        // removed has finished.
+        analysisLock.lock()
+        analyzer.reset()
+        beats.reset()
+        analysisLock.unlock()
         let format = node.outputFormat(forBus: 0)
         guard format.sampleRate > 0 else { return }
         node.installTap(onBus: 0, bufferSize: 1024, format: format) { [weak self] buffer, _ in
@@ -280,10 +297,32 @@ final class AudioEngineController: ObservableObject {
         tappedNode = nil
     }
 
-    private func analyse(buffer: AVAudioPCMBuffer, sampleRate: Double) {
-        let windows = analyzer.process(buffer: buffer, sampleRate: sampleRate)
-        guard let spectrum = windows.last else { return }
+    /// Returns the published features to silence once nothing is analysing any more.
+    ///
+    /// `analyse` is the only thing that ever writes `features`, so with no tap
+    /// installed the last window it saw stays published for good. Leave Listen mode in
+    /// a loud room and every audio-reactive layer freezes at whatever the music was
+    /// doing on that frame, and "animate only with music" keeps seeing a level above
+    /// its gate — so a show set to hold for silence never holds again.
+    ///
+    /// Does nothing while a tap is still running: a paused track leaves the mixer tap
+    /// in place, and that one decays to silence on its own, which looks better than a
+    /// jump to zero. The analyser's and the tracker's own state is cleared by
+    /// `installAnalysisTap`, under the lock `analyse` takes.
+    private func clearFeaturesIfIdle() {
+        guard tappedNode == nil else { return }
+        features = AudioFeatures()
+    }
 
+    private func analyse(buffer: AVAudioPCMBuffer, sampleRate: Double) {
+        // The analyser and the tracker are reached only under `analysisLock`.
+        // `AVAudioNode.removeTap(onBus:)` does not promise that a tap block already
+        // running on the audio thread has returned, so the reset in
+        // `installAnalysisTap` can overlap the callback of the tap it just took off.
+        // Both sides rewrite the same arrays, so that overlap is a data race, not
+        // merely a stale reading.
+        analysisLock.lock()
+        let windows = analyzer.process(buffer: buffer, sampleRate: sampleRate)
         // A buffer can carry several windows, and the tracker has to see each one at
         // the moment it actually happened: timing the whole buffer as a single hop
         // makes this clock run at a fraction of real time, and every interval the
@@ -297,6 +336,9 @@ final class AudioEngineController: ObservableObject {
         let bpm = beats.bpm
         let beat = beats.beatEnvelope
         let confidence = beats.tempoConfidence
+        analysisLock.unlock()
+
+        guard let spectrum = windows.last else { return }
 
         DispatchQueue.main.async { [weak self] in
             guard let self else { return }

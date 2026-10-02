@@ -58,6 +58,15 @@ final class SpectrumAnalyzer {
     /// stands for. Callers timestamping windows need it; nothing else should care.
     var windowSize: Int { fftSize }
 
+    /// Forgets the part-filled window and the window flux is measured against, so a
+    /// new run of analysis starts from silence rather than from whatever was playing
+    /// when the last one stopped.
+    func reset() {
+        ringFill = 0
+        ring = [Float](repeating: 0, count: fftSize)
+        previousMagnitudes = [Float](repeating: 0, count: fftSize / 2)
+    }
+
     /// Feeds a tap buffer in and returns one spectrum per complete window it finished,
     /// oldest first. Empty while the ring is still filling.
     ///
