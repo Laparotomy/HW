@@ -10,6 +10,18 @@ protocol TextureSource: AnyObject {
     /// Advances internal state (video decoding, drift correction) and returns the
     /// texture to draw, or nil to skip the layer this frame.
     func texture(showTime: Double, isPlaying: Bool) -> MTLTexture?
+
+    /// Tells the source whether its layer is being drawn.
+    ///
+    /// A source only ever hears from the renderer through `texture`, and the
+    /// renderer skips hidden layers — so without this a hidden source has no way
+    /// of knowing it should stop working.
+    func setVisible(_ isVisible: Bool)
+}
+
+extension TextureSource {
+    /// Sources that hold no running work have nothing to stop.
+    func setVisible(_ isVisible: Bool) {}
 }
 
 /// 1x1 white pixel, used by colour layers so solids share the media pipeline.
@@ -68,6 +80,11 @@ final class VideoTextureSource: TextureSource {
     private var retainedTexture: CVMetalTexture?
     private var duration: Double = 0
     private var isSeeking = false
+    /// Mirrors the layer's eye. Everything else in this class runs on main with
+    /// the render loop, and a seek started while the layer was visible can land
+    /// after it was hidden; the completion checks this before touching the rate
+    /// so it cannot undo the pause.
+    private var isVisible = true
 
     var playback: VideoPlayback
 
@@ -98,6 +115,23 @@ final class VideoTextureSource: TextureSource {
         self.playback = playback
         player.volume = Float(playback.volume)
         player.isMuted = playback.volume <= 0
+    }
+
+    /// Stops the player while the layer is hidden.
+    ///
+    /// `syncTransport` is only reachable through `texture`, which the renderer
+    /// calls for visible layers alone. A layer hidden mid-clip would otherwise keep
+    /// decoding — and keep sounding, if its volume had been raised — until it was
+    /// shown again or deleted. Hiding can also happen on its own through a
+    /// modulation route, so nobody need have touched the eye.
+    ///
+    /// Only the pause is done here. Resuming is left to `syncTransport` on the next
+    /// frame the layer is drawn, which already knows where in the clip the show
+    /// clock wants to be.
+    func setVisible(_ isVisible: Bool) {
+        self.isVisible = isVisible
+        guard !isVisible else { return }
+        if player.rate != 0 { player.pause() }
     }
 
     /// Where in the clip the show clock says we should be.
@@ -150,9 +184,18 @@ final class VideoTextureSource: TextureSource {
         isSeeking = true
         let time = CMTime(seconds: target, preferredTimescale: 600)
         player.seek(to: time, toleranceBefore: .zero, toleranceAfter: .zero) { [weak self] _ in
-            guard let self else { return }
-            self.isSeeking = false
-            self.player.rate = Float(self.playback.rate)
+            // AVPlayer calls this back on an arbitrary queue, while `isSeeking`,
+            // `playback` and the rate are otherwise only touched on main by the
+            // render loop and by `reconcile`. Hop back before writing any of them.
+            DispatchQueue.main.async { [weak self] in
+                guard let self else { return }
+                self.isSeeking = false
+                // The layer may have been hidden while the seek was in flight.
+                // Restarting it here would undo `setVisible`'s pause and leave a
+                // hidden clip decoding, and sounding if its volume was raised.
+                guard self.isVisible else { return }
+                self.player.rate = Float(self.playback.rate)
+            }
         }
     }
 
