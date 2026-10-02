@@ -120,6 +120,7 @@ final class AudioEngineController: ObservableObject {
         file = nil
         duration = 0
         trackTitle = nil
+        clearFeaturesIfIdle()
     }
 
     var hasTrack: Bool { file != nil }
@@ -235,9 +236,10 @@ final class AudioEngineController: ObservableObject {
                     self.engine.prepare()
                     try self.engine.start()
                 }
+                // `installAnalysisTap` resets the tracker for us, before the tap that
+                // would otherwise be writing to it is installed.
                 self.installAnalysisTap(on: input)
                 self.isListening = true
-                self.beats.reset()
             } catch {
                 self.log.error("Listen mode failed: \(error.localizedDescription, privacy: .public)")
                 self.lastError = "Listen mode failed: \(error.localizedDescription)"
@@ -250,6 +252,7 @@ final class AudioEngineController: ObservableObject {
         removeTap()
         configureSession(listening: false)
         if isPlaying { installAnalysisTap(on: engine.mainMixerNode) }
+        clearFeaturesIfIdle()
     }
 
     private func requestRecordPermission() async -> Bool {
@@ -267,6 +270,14 @@ final class AudioEngineController: ObservableObject {
     private func installAnalysisTap(on node: AVAudioNode) {
         if tappedNode === node { return }
         removeTap()
+        // A new run starts from silence. The analyser measures flux against the
+        // previous window and the tracker holds intervals measured from onsets that
+        // may be minutes old, so carried across a stop the first window of the next
+        // run reads as one enormous onset against whatever was playing before.
+        // Done here, between the old tap coming off and the new one going on, because
+        // it is the one moment nothing is calling into either of them.
+        analyzer.reset()
+        beats.reset()
         let format = node.outputFormat(forBus: 0)
         guard format.sampleRate > 0 else { return }
         node.installTap(onBus: 0, bufferSize: 1024, format: format) { [weak self] buffer, _ in
@@ -278,6 +289,23 @@ final class AudioEngineController: ObservableObject {
     private func removeTap() {
         tappedNode?.removeTap(onBus: 0)
         tappedNode = nil
+    }
+
+    /// Returns the published features to silence once nothing is analysing any more.
+    ///
+    /// `analyse` is the only thing that ever writes `features`, so with no tap
+    /// installed the last window it saw stays published for good. Leave Listen mode in
+    /// a loud room and every audio-reactive layer freezes at whatever the music was
+    /// doing on that frame, and "animate only with music" keeps seeing a level above
+    /// its gate — so a show set to hold for silence never holds again.
+    ///
+    /// Does nothing while a tap is still running: a paused track leaves the mixer tap
+    /// in place, and that one decays to silence on its own, which looks better than a
+    /// jump to zero. The analyser's and the tracker's own state is cleared by
+    /// `installAnalysisTap`, where nothing is reading it.
+    private func clearFeaturesIfIdle() {
+        guard tappedNode == nil else { return }
+        features = AudioFeatures()
     }
 
     private func analyse(buffer: AVAudioPCMBuffer, sampleRate: Double) {
