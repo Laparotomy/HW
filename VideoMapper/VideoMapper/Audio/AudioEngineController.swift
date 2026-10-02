@@ -69,6 +69,10 @@ final class AudioEngineController: ObservableObject {
     private var startPosition: Double = 0
     private var loops = true
     private var tappedNode: AVAudioNode?
+    /// Guards `analysisTime`, which the tap thread advances and the main thread
+    /// reads when the user taps tempo. Without it the two see different clocks and
+    /// a tap lands against a stale instant.
+    private let analysisLock = NSLock()
     private var analysisTime: Double = 0
 
     init() {
@@ -283,11 +287,14 @@ final class AudioEngineController: ObservableObject {
     private func analyse(buffer: AVAudioPCMBuffer, sampleRate: Double) {
         guard let spectrum = analyzer.process(buffer: buffer, sampleRate: sampleRate) else { return }
         // One hop of samples has elapsed since the last window.
-        analysisTime += 1024 / sampleRate
-        beats.process(flux: spectrum.flux, at: analysisTime)
-        let bpm = beats.bpm
-        let beat = beats.beatEnvelope
-        let confidence = beats.tempoConfidence
+        let now = analysisLock.withLock { () -> Double in
+            analysisTime += 1024 / sampleRate
+            return analysisTime
+        }
+        beats.process(flux: spectrum.flux, at: now)
+        // One read, not three: separate reads could straddle a beat and pair a bpm
+        // from before it with an envelope from after.
+        let tempo = beats.snapshot()
 
         DispatchQueue.main.async { [weak self] in
             guard let self else { return }
@@ -300,15 +307,16 @@ final class AudioEngineController: ObservableObject {
             next.bass = follow(self.features.bass, Double(spectrum.bass))
             next.mid = follow(self.features.mid, Double(spectrum.mid))
             next.treble = follow(self.features.treble, Double(spectrum.treble))
-            next.beat = beat
-            next.bpm = bpm
-            next.tempoConfidence = confidence
+            next.beat = tempo.beatEnvelope
+            next.bpm = tempo.bpm
+            next.tempoConfidence = tempo.tempoConfidence
             self.features = next
         }
     }
 
     /// Registers a manual tap-tempo hit.
     func tapTempo() {
-        beats.tap(at: analysisTime)
+        let now = analysisLock.withLock { analysisTime }
+        beats.tap(at: now)
     }
 }

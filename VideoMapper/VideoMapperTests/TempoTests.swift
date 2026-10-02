@@ -140,3 +140,112 @@ final class ClipSpeedTests: XCTestCase {
         XCTAssertTrue(playback.followsShowClock)
     }
 }
+
+/// The tracker is driven from two threads at once: the audio tap feeds `process`
+/// while the user can tap tempo or restart Listen mode from the UI. Before the lock
+/// that meant two threads inside the same `fluxHistory` and `intervals` arrays,
+/// which corrupts them rather than merely mis-reading a beat. These tests fail by
+/// trapping, so a regression shows up as a crash in CI rather than a bad number.
+final class BeatTrackerConcurrencyTests: XCTestCase {
+
+    private func assertPlausible(_ snapshot: BeatTracker.Snapshot) {
+        // After octave folding a live estimate is either nothing yet or musical.
+        XCTAssertTrue(snapshot.bpm == 0 || (snapshot.bpm >= 70 && snapshot.bpm <= 180),
+                      "bpm out of range: \(snapshot.bpm)")
+        XCTAssertGreaterThanOrEqual(snapshot.tempoConfidence, 0)
+        XCTAssertLessThanOrEqual(snapshot.tempoConfidence, 1)
+        XCTAssertGreaterThanOrEqual(snapshot.phase, 0)
+        XCTAssertLessThan(snapshot.phase, 1)
+        XCTAssertGreaterThanOrEqual(snapshot.beatEnvelope, 0)
+        XCTAssertLessThanOrEqual(snapshot.beatEnvelope, 1)
+    }
+
+    /// The envelope is derived from bpm and phase, so a snapshot that mixes one
+    /// from before a beat with another from after it would be internally
+    /// inconsistent — which is the whole reason `snapshot()` exists.
+    func testASnapshotAgreesWithItself() {
+        let tracker = BeatTracker()
+        var time = 0.0
+        for _ in 0..<12 {
+            tracker.tap(at: time)
+            time += 0.5
+        }
+        tracker.process(flux: 0.1, at: time)
+
+        let snapshot = tracker.snapshot()
+        XCTAssertGreaterThan(snapshot.bpm, 0)
+        XCTAssertEqual(snapshot.beatEnvelope, pow(1 - snapshot.phase, 2), accuracy: 1e-12)
+        assertPlausible(snapshot)
+    }
+
+    func testASnapshotMatchesTheIndividualReads() {
+        let tracker = BeatTracker()
+        var time = 0.0
+        for _ in 0..<8 {
+            tracker.tap(at: time)
+            time += 0.48
+        }
+        let snapshot = tracker.snapshot()
+        XCTAssertEqual(snapshot.bpm, tracker.bpm)
+        XCTAssertEqual(snapshot.tempoConfidence, tracker.tempoConfidence)
+        XCTAssertEqual(snapshot.phase, tracker.phase)
+        XCTAssertEqual(snapshot.beatEnvelope, tracker.beatEnvelope)
+        XCTAssertEqual(snapshot.didBeat, tracker.didBeat)
+    }
+
+    func testAFreshSnapshotIsEmpty() {
+        let snapshot = BeatTracker().snapshot()
+        XCTAssertEqual(snapshot, BeatTracker.Snapshot())
+    }
+
+    /// Analysis, a manual tap and a read, all at once — the exact overlap that
+    /// tapping tempo during playback produces.
+    func testAnalysingAndTappingAtOnceStaysSound() {
+        let tracker = BeatTracker()
+        let iterations = 600
+        let group = DispatchGroup()
+
+        DispatchQueue.global().async(group: group) {
+            var time = 0.0
+            for index in 0..<iterations {
+                tracker.process(flux: index % 5 == 0 ? 8 : 0.2, at: time)
+                time += 0.02
+            }
+        }
+        DispatchQueue.global().async(group: group) {
+            var time = 0.0
+            for _ in 0..<iterations {
+                tracker.tap(at: time)
+                time += 0.5
+            }
+        }
+        DispatchQueue.global().async(group: group) {
+            for _ in 0..<iterations { _ = tracker.snapshot() }
+        }
+
+        XCTAssertEqual(group.wait(timeout: .now() + 60), .success)
+        assertPlausible(tracker.snapshot())
+    }
+
+    /// Listen mode resets the tracker from the main thread while the tap thread is
+    /// still delivering buffers.
+    func testResettingDuringAnalysisStaysSound() {
+        let tracker = BeatTracker()
+        let iterations = 600
+        let group = DispatchGroup()
+
+        DispatchQueue.global().async(group: group) {
+            var time = 0.0
+            for index in 0..<iterations {
+                tracker.process(flux: index % 5 == 0 ? 8 : 0.2, at: time)
+                time += 0.02
+            }
+        }
+        DispatchQueue.global().async(group: group) {
+            for _ in 0..<iterations { tracker.reset() }
+        }
+
+        XCTAssertEqual(group.wait(timeout: .now() + 60), .success)
+        assertPlausible(tracker.snapshot())
+    }
+}

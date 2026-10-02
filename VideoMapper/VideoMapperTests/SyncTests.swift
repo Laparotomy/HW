@@ -140,3 +140,134 @@ final class SyncMessageTests: XCTestCase {
         }
     }
 }
+
+/// `SyncSession` folds a reply in on Multipeer's queue and then publishes the result
+/// on the main queue. A reply already in flight when the role changes lands *after*
+/// `teardown()` has reset the clock and zeroed the published values, so without a
+/// guard it puts the old offset back and the UI claims a lock on a host the device
+/// is no longer talking to. These cover the two things that stop it: `reset()` moves
+/// the generation on, and it drops the pending probes a late reply would match.
+final class ClockGenerationTests: XCTestCase {
+
+    /// Drives one full exchange and returns the id used, so a test can replay it.
+    private func exchange(_ sync: ClockSynchronizer, at localSend: Double,
+                          offset: Double, delay: Double = 0.01) {
+        let id = UUID()
+        sync.noteProbeSent(id: id, at: localSend)
+        sync.noteReply(id: id, hostTime: localSend + delay / 2 + offset,
+                       localNow: localSend + delay)
+    }
+
+    func testAFreshEstimatorIsAtGenerationZero() {
+        XCTAssertEqual(ClockSynchronizer().snapshot().generation, 0)
+    }
+
+    func testResetMovesTheGenerationOn() {
+        let sync = ClockSynchronizer()
+        for i in 0..<6 { exchange(sync, at: 100 + Double(i), offset: 12) }
+
+        let beforeReset = sync.snapshot()
+        XCTAssertTrue(beforeReset.isSynchronized)
+        XCTAssertTrue(sync.isCurrent(beforeReset))
+
+        sync.reset()
+
+        // This is the reading an in-flight reply would carry. It must no longer
+        // count as current, or it would be published over the zeroed state.
+        XCTAssertFalse(sync.isCurrent(beforeReset))
+        XCTAssertTrue(sync.isCurrent(sync.snapshot()))
+        XCTAssertEqual(sync.snapshot().generation, beforeReset.generation + 1)
+    }
+
+    func testEachResetMovesItOnAgain() {
+        let sync = ClockSynchronizer()
+        let start = sync.snapshot().generation
+        for count in 1...4 {
+            sync.reset()
+            XCTAssertEqual(sync.snapshot().generation, start + count)
+        }
+    }
+
+    /// The other half of the fix: a reply that arrives after the teardown finds no
+    /// matching probe, so it cannot revive the estimate in the first place.
+    func testAReplyWhoseProbeWasDiscardedByResetIsIgnored() {
+        let sync = ClockSynchronizer()
+        let id = UUID()
+        sync.noteProbeSent(id: id, at: 100)
+
+        sync.reset()
+        sync.noteReply(id: id, hostTime: 112.005, localNow: 100.01)
+
+        XCTAssertFalse(sync.isSynchronized)
+        XCTAssertEqual(sync.offset, 0)
+        XCTAssertEqual(sync.roundTrip, 0)
+    }
+
+    func testResetClearsTheEstimate() {
+        let sync = ClockSynchronizer()
+        for i in 0..<6 { exchange(sync, at: 100 + Double(i), offset: -3) }
+        XCTAssertTrue(sync.isSynchronized)
+
+        sync.reset()
+
+        XCTAssertFalse(sync.isSynchronized)
+        XCTAssertEqual(sync.offset, 0)
+        XCTAssertEqual(sync.roundTrip, 0)
+        XCTAssertEqual(sync.hostTime(forLocalTime: 7), 7)
+    }
+
+    func testASnapshotMatchesTheIndividualReads() {
+        let sync = ClockSynchronizer()
+        for i in 0..<6 { exchange(sync, at: 200 + Double(i), offset: 4.5) }
+
+        let reading = sync.snapshot()
+        XCTAssertEqual(reading.offset, sync.offset)
+        XCTAssertEqual(reading.roundTrip, sync.roundTrip)
+        XCTAssertEqual(reading.isSynchronized, sync.isSynchronized)
+        XCTAssertEqual(reading.generation, sync.generation)
+    }
+
+    /// Probes go out from two threads, replies land on a third and the main thread
+    /// resets and reads `hostNow`. Before the lock this was `samples` and `pending`
+    /// mutated concurrently; the test fails by trapping.
+    func testConcurrentExchangesAndResetsStaySound() {
+        let sync = ClockSynchronizer()
+        let iterations = 400
+        let group = DispatchGroup()
+
+        DispatchQueue.global().async(group: group) {
+            // Inlined rather than calling the helper, so the closure captures only
+            // the estimator and not the test case.
+            for i in 0..<iterations {
+                let sent = 1000 + Double(i) * 0.1
+                let id = UUID()
+                sync.noteProbeSent(id: id, at: sent)
+                sync.noteReply(id: id, hostTime: sent + 0.005 + 8, localNow: sent + 0.01)
+            }
+        }
+        DispatchQueue.global().async(group: group) {
+            for i in 0..<iterations {
+                sync.noteProbeSent(id: UUID(), at: 2000 + Double(i) * 0.1)
+            }
+        }
+        DispatchQueue.global().async(group: group) {
+            for _ in 0..<iterations { sync.reset() }
+        }
+        DispatchQueue.global().async(group: group) {
+            for _ in 0..<iterations {
+                let reading = sync.snapshot()
+                // Whatever a reader sees, the parts of it must belong together.
+                if !reading.isSynchronized {
+                    XCTAssertEqual(reading.offset, 0)
+                    XCTAssertEqual(reading.roundTrip, 0)
+                }
+                _ = sync.hostNow
+            }
+        }
+
+        XCTAssertEqual(group.wait(timeout: .now() + 60), .success)
+        let final = sync.snapshot()
+        XCTAssertGreaterThanOrEqual(final.roundTrip, 0)
+        XCTAssertTrue(sync.isCurrent(final))
+    }
+}
