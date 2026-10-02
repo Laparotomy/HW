@@ -141,6 +141,31 @@ final class VideoTextureSource: TextureSource {
         retainedTexture.flatMap { CVMetalTextureGetTexture($0) }
     }
 
+    /// Whether a clip has run out of item and needs a seek to come back round.
+    ///
+    /// `actionAtItemEnd` is `.pause`, and a player parked on its last frame ignores
+    /// both `play()` and a rate write: only a seek restarts it. Nothing else in the
+    /// transport notices, because folding the error across the loop seam makes a clip
+    /// that has just run out look perfectly in sync — `target` near zero against an
+    /// `actual` of a whole duration folds to an error of about nothing — so the drift
+    /// corrector sees no reason to act.
+    static func hasRunOut(actual: Double, duration: Double, loops: Bool) -> Bool {
+        guard loops, duration > 0, actual.isFinite else { return false }
+        return actual >= duration - deadband
+    }
+
+    /// Where a free-running clip starts its next pass. Show-clock clips get the
+    /// position the show asks for instead.
+    ///
+    /// An offset at or past the end of the file restarts from the beginning rather
+    /// than from itself: seeking back to a position that already counts as the end
+    /// would run out again on the same frame and never move.
+    private var loopRestartPosition: Double {
+        let offset = max(playback.startOffset, 0)
+        guard duration > 0 else { return offset }
+        return Self.hasRunOut(actual: offset, duration: duration, loops: true) ? 0 : offset
+    }
+
     /// Jumps the player to `target`, ignoring the request if a seek is already in
     /// flight — stacking seeks on a drifting clip makes the drift worse, not better.
     private func seekIfNeeded(to target: Double) {
@@ -173,6 +198,13 @@ final class VideoTextureSource: TextureSource {
         }
 
         guard playback.followsShowClock else {
+            // A free-running clip has no show clock to pull it back round, so without
+            // this it plays once and holds its last frame for the rest of the show.
+            if Self.hasRunOut(actual: CMTimeGetSeconds(player.currentTime()),
+                              duration: duration, loops: playback.loops) {
+                seekIfNeeded(to: loopRestartPosition)
+                return
+            }
             if player.rate == 0 { player.play() }
             player.rate = Float(playback.rate)
             return
@@ -181,6 +213,13 @@ final class VideoTextureSource: TextureSource {
         let target = targetTime(showTime: showTime)
         let actual = CMTimeGetSeconds(player.currentTime())
         guard actual.isFinite else { return }
+
+        // Taken before the fold below, which is what hides this case from the error
+        // test: the clip is parked at the end and only a seek will move it.
+        if Self.hasRunOut(actual: actual, duration: duration, loops: playback.loops) {
+            seekIfNeeded(to: target)
+            return
+        }
 
         var error = target - actual
         // Near a loop point the raw error is a whole duration out; fold it.
