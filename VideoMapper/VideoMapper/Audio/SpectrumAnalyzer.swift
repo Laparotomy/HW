@@ -54,13 +54,23 @@ final class SpectrumAnalyzer {
         vDSP_destroy_fftsetup(setup)
     }
 
-    /// Feeds a tap buffer in and returns a spectrum once a full window is available.
-    func process(buffer: AVAudioPCMBuffer, sampleRate: Double) -> Spectrum? {
-        guard let channel = buffer.floatChannelData?[0] else { return nil }
-        let count = Int(buffer.frameLength)
-        guard count > 0 else { return nil }
+    /// Samples per analysis window, and so the amount of audio one returned spectrum
+    /// stands for. Callers timestamping windows need it; nothing else should care.
+    var windowSize: Int { fftSize }
 
-        var result: Spectrum?
+    /// Feeds a tap buffer in and returns one spectrum per complete window it finished,
+    /// oldest first. Empty while the ring is still filling.
+    ///
+    /// A tap's requested buffer size is a request and not a promise — CoreAudio hands
+    /// over whatever the current IO cycle produced, which is routinely several windows'
+    /// worth. Returning only the last of them dropped every onset in between and left
+    /// the caller believing one window of time had passed when several had.
+    func process(buffer: AVAudioPCMBuffer, sampleRate: Double) -> [Spectrum] {
+        guard let channel = buffer.floatChannelData?[0] else { return [] }
+        let count = Int(buffer.frameLength)
+        guard count > 0 else { return [] }
+
+        var windows: [Spectrum] = []
         var index = 0
         while index < count {
             let chunk = min(fftSize - ringFill, count - index)
@@ -71,11 +81,11 @@ final class SpectrumAnalyzer {
             ringFill += chunk
             index += chunk
             if ringFill == fftSize {
-                result = analyseWindow(sampleRate: sampleRate)
+                windows.append(analyseWindow(sampleRate: sampleRate))
                 ringFill = 0
             }
         }
-        return result
+        return windows
     }
 
     private func analyseWindow(sampleRate: Double) -> Spectrum {
