@@ -69,6 +69,9 @@ final class AudioEngineController: ObservableObject {
     private var startPosition: Double = 0
     private var loops = true
     private var tappedNode: AVAudioNode?
+    /// Guards the two fields below. The audio tap thread advances them while the
+    /// main thread reads them in `tapTempo`. Not recursive.
+    private let timebaseLock = NSLock()
     private var analysisTime: Double = 0
     /// Wall-clock reading that `analysisTime` zero corresponds to.
     ///
@@ -278,9 +281,38 @@ final class AudioEngineController: ObservableObject {
 
     // MARK: - Analysis
 
+    /// Where the beat timebase stands now: `analysisTime` while analysis runs, and
+    /// the wall clock carrying on from it when it does not.
+    private var currentBeatTime: Double {
+        timebaseLock.lock(); defer { timebaseLock.unlock() }
+        return HostClock.now - analysisEpoch
+    }
+
+    /// Advances the analysis timebase by one hop and re-anchors the epoch to it, so
+    /// the two stay the same clock.
+    private func advanceAnalysisTime(by delta: Double) -> Double {
+        timebaseLock.lock(); defer { timebaseLock.unlock() }
+        analysisTime += delta
+        analysisEpoch = HostClock.now - analysisTime
+        return analysisTime
+    }
+
+    /// Picks `analysisTime` up where the beat timebase has got to.
+    ///
+    /// `analysisTime` only accumulates while a tap is installed, so without this it
+    /// would restart near where it left off while the taps the user made meanwhile
+    /// were stamped much later. The tracker would see time run backwards and measure
+    /// negative intervals. Called on every real install, so the clock only ever
+    /// moves forward.
+    private func resumeAnalysisTimebase() {
+        timebaseLock.lock(); defer { timebaseLock.unlock() }
+        analysisTime = HostClock.now - analysisEpoch
+    }
+
     private func installAnalysisTap(on node: AVAudioNode) {
         if tappedNode === node { return }
         removeTap()
+        resumeAnalysisTimebase()
         let format = node.outputFormat(forBus: 0)
         guard format.sampleRate > 0 else { return }
         node.installTap(onBus: 0, bufferSize: 1024, format: format) { [weak self] buffer, _ in
@@ -297,9 +329,8 @@ final class AudioEngineController: ObservableObject {
     private func analyse(buffer: AVAudioPCMBuffer, sampleRate: Double) {
         guard let spectrum = analyzer.process(buffer: buffer, sampleRate: sampleRate) else { return }
         // One hop of samples has elapsed since the last window.
-        analysisTime += 1024 / sampleRate
-        analysisEpoch = HostClock.now - analysisTime
-        beats.process(flux: spectrum.flux, at: analysisTime)
+        let windowTime = advanceAnalysisTime(by: 1024 / sampleRate)
+        beats.process(flux: spectrum.flux, at: windowTime)
         let bpm = beats.bpm
         let beat = beats.beatEnvelope
         let confidence = beats.tempoConfidence
@@ -330,6 +361,6 @@ final class AudioEngineController: ObservableObject {
     /// tap landed on the same instant, so no interval was ever measured and the
     /// tempo never moved.
     func tapTempo() {
-        beats.tap(at: HostClock.now - analysisEpoch)
+        beats.tap(at: currentBeatTime)
     }
 }
