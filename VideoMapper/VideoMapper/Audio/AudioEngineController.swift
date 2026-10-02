@@ -69,7 +69,25 @@ final class AudioEngineController: ObservableObject {
     private var startPosition: Double = 0
     private var loops = true
     private var tappedNode: AVAudioNode?
+    /// Show time of the most recent analysis window.
+    ///
+    /// Advanced on the audio tap thread and read on the main thread by `tapTempo`,
+    /// so both go through `analysisLock` rather than touching it directly.
+    private let analysisLock = NSLock()
     private var analysisTime: Double = 0
+
+    private var currentAnalysisTime: Double {
+        analysisLock.lock()
+        defer { analysisLock.unlock() }
+        return analysisTime
+    }
+
+    private func advanceAnalysisTime(by delta: Double) -> Double {
+        analysisLock.lock()
+        defer { analysisLock.unlock() }
+        analysisTime += delta
+        return analysisTime
+    }
 
     init() {
         engine.attach(player)
@@ -283,11 +301,11 @@ final class AudioEngineController: ObservableObject {
     private func analyse(buffer: AVAudioPCMBuffer, sampleRate: Double) {
         guard let spectrum = analyzer.process(buffer: buffer, sampleRate: sampleRate) else { return }
         // One hop of samples has elapsed since the last window.
-        analysisTime += 1024 / sampleRate
-        beats.process(flux: spectrum.flux, at: analysisTime)
-        let bpm = beats.bpm
-        let beat = beats.beatEnvelope
-        let confidence = beats.tempoConfidence
+        let windowTime = advanceAnalysisTime(by: 1024 / sampleRate)
+        beats.process(flux: spectrum.flux, at: windowTime)
+        // One read, so the tempo, the envelope and the confidence all describe the
+        // same moment even if a tap lands between them.
+        let tempo = beats.snapshot()
 
         DispatchQueue.main.async { [weak self] in
             guard let self else { return }
@@ -300,15 +318,15 @@ final class AudioEngineController: ObservableObject {
             next.bass = follow(self.features.bass, Double(spectrum.bass))
             next.mid = follow(self.features.mid, Double(spectrum.mid))
             next.treble = follow(self.features.treble, Double(spectrum.treble))
-            next.beat = beat
-            next.bpm = bpm
-            next.tempoConfidence = confidence
+            next.beat = tempo.beatEnvelope
+            next.bpm = tempo.bpm
+            next.tempoConfidence = tempo.tempoConfidence
             self.features = next
         }
     }
 
     /// Registers a manual tap-tempo hit.
     func tapTempo() {
-        beats.tap(at: analysisTime)
+        beats.tap(at: currentAnalysisTime)
     }
 }
