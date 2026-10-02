@@ -56,6 +56,11 @@ final class SyncSession: NSObject, ObservableObject {
     private var browser: MCNearbyServiceBrowser?
     private var probeTimer: Timer?
     private var probesSent = 0
+    /// `role` is published for the UI, so it is written on the main thread — but the
+    /// Multipeer queue has to test it on every incoming message. This mirror is the
+    /// copy that queue reads.
+    private let stateLock = NSLock()
+    private var activeRole: SyncRole = .solo
 
     override init() {
         // Peer display names are limited to 63 bytes.
@@ -70,6 +75,9 @@ final class SyncSession: NSObject, ObservableObject {
 
     var localName: String { localPeerID.displayName }
 
+    /// The role as seen from any thread. Use this off the main thread, not `role`.
+    private var currentRole: SyncRole { stateLock.withLock { activeRole } }
+
     var connectedPeers: [MCPeerID] { session?.connectedPeers ?? [] }
 
     // MARK: - Lifecycle
@@ -78,6 +86,7 @@ final class SyncSession: NSObject, ObservableObject {
         guard newRole != role else { return }
         teardown()
         role = newRole
+        stateLock.withLock { activeRole = newRole }
         switch newRole {
         case .solo:
             break
@@ -155,7 +164,7 @@ final class SyncSession: NSObject, ObservableObject {
         // that tracks drift without flooding the link.
         probeTimer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] timer in
             guard let self else { timer.invalidate(); return }
-            guard self.role == .follower, let session = self.session,
+            guard self.currentRole == .follower, let session = self.session,
                   !session.connectedPeers.isEmpty else { return }
             if self.probesSent > 10, self.probesSent % 5 != 0 {
                 self.probesSent += 1
@@ -179,22 +188,37 @@ final class SyncSession: NSObject, ObservableObject {
     private func handleClockMessage(_ message: SyncMessage, from peer: MCPeerID) -> Bool {
         switch message {
         case .ping(let id, let t0):
-            guard role == .host else { return true }
+            guard currentRole == .host else { return true }
             send(.pong(id: id, t0: t0, t1: HostClock.now), to: peer)
             return true
         case .pong(let id, _, let t1):
-            guard role == .follower else { return true }
+            guard currentRole == .follower else { return true }
             clock.noteReply(id: id, hostTime: t1, localNow: HostClock.now)
+            // Read the estimate here, on the thread that just folded the reply in,
+            // so the three published values cannot come from either side of the
+            // next one.
+            let reading = clock.snapshot()
             DispatchQueue.main.async { [weak self] in
-                guard let self else { return }
-                self.clockOffset = self.clock.offset
-                self.roundTrip = self.clock.roundTrip
-                self.isSynchronized = self.clock.isSynchronized
+                self?.publish(reading)
             }
             return true
         default:
             return false
         }
+    }
+
+    /// Publishes a clock reading, unless the run it came from has since ended.
+    ///
+    /// `teardown()` resets the clock and then zeroes these values on the main queue.
+    /// A reply already in flight lands after that, and without this guard it would
+    /// put the old offset back — leaving the UI claiming a lock on a host this
+    /// device is no longer talking to, and `hostNow` returning a time derived from
+    /// it. Dropping the reading is correct: it describes a session that is gone.
+    private func publish(_ reading: ClockSynchronizer.Reading) {
+        guard clock.isCurrent(reading) else { return }
+        clockOffset = reading.offset
+        roundTrip = reading.roundTrip
+        isSynchronized = reading.isSynchronized
     }
 
     private func refreshPeers() {
@@ -211,8 +235,8 @@ extension SyncSession: MCSessionDelegate {
     func session(_ session: MCSession, peer peerID: MCPeerID, didChange state: MCSessionState) {
         refreshPeers()
         guard state == .connected else { return }
-        send(.hello(name: localPeerID.displayName, isHost: role == .host), to: peerID)
-        if role == .follower {
+        send(.hello(name: localPeerID.displayName, isHost: currentRole == .host), to: peerID)
+        if currentRole == .follower {
             // Get a first estimate immediately rather than waiting for the timer.
             sendProbe()
         }
