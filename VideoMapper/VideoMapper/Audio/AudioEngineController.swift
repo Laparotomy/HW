@@ -281,10 +281,19 @@ final class AudioEngineController: ObservableObject {
     }
 
     private func analyse(buffer: AVAudioPCMBuffer, sampleRate: Double) {
-        guard let spectrum = analyzer.process(buffer: buffer, sampleRate: sampleRate) else { return }
-        // One hop of samples has elapsed since the last window.
-        analysisTime += 1024 / sampleRate
-        beats.process(flux: spectrum.flux, at: analysisTime)
+        let windows = analyzer.process(buffer: buffer, sampleRate: sampleRate)
+        guard let spectrum = windows.last else { return }
+
+        // A buffer can carry several windows, and the tracker has to see each one at
+        // the moment it actually happened: timing the whole buffer as a single hop
+        // makes this clock run at a fraction of real time, and every interval the
+        // tracker measures — and so the tempo it reports — comes out wrong by that
+        // same fraction.
+        let hop = Double(analyzer.windowSize) / sampleRate
+        for window in windows {
+            analysisTime += hop
+            beats.process(flux: window.flux, at: analysisTime)
+        }
         let bpm = beats.bpm
         let beat = beats.beatEnvelope
         let confidence = beats.tempoConfidence
