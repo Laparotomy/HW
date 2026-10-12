@@ -1,3 +1,4 @@
+import Combine
 import XCTest
 @testable import VideoMapper
 
@@ -293,5 +294,84 @@ final class ModulationStateTests: XCTestCase {
         // A layer scaled to nothing would vanish and could not be got back by ear.
         XCTAssertFalse(resolved.quad.p00.x.isNaN)
         XCTAssertTrue(resolved.quad.p00.x.isFinite)
+    }
+}
+
+/// Previews are asked for from inside `body`.
+///
+/// SwiftUI forbids publishing a change during a view update — "this will cause
+/// undefined behavior" — and it only says so at runtime, when a view that trips it is
+/// actually on screen. A build cannot catch it and neither can a smoke launch that
+/// never opens the offending screen, so it has to be caught here.
+@MainActor
+final class ThumbnailPublishingTests: XCTestCase {
+
+    func testAskingForAPreviewDuringAViewUpdatePublishesNothing() {
+        let store = ContentThumbnailStore.shared
+        var published = 0
+        let token = store.objectWillChange.sink { _ in published += 1 }
+        defer { token.cancel() }
+
+        let projectID = UUID()
+        _ = store.image(for: .solid, projectID: projectID)
+        // Every kind, because the generator branch is the one that used to write its
+        // result straight into the published dictionary.
+        for kind in GeneratorKind.allCases {
+            _ = store.image(for: .generator(kind, kind.defaultSettings), projectID: projectID)
+        }
+
+        XCTAssertEqual(published, 0, "image(for:projectID:) published during a view update")
+    }
+
+    /// Asking twice has to give the same answer, or a layer's preview would flicker
+    /// between two renders of the same thing.
+    func testTheSameContentAnswersTheSameWayTwice() {
+        let store = ContentThumbnailStore.shared
+        let projectID = UUID()
+        let content = LayerContent.generator(.plasma, GeneratorKind.plasma.defaultSettings)
+
+        let first = store.image(for: content, projectID: projectID)
+        let second = store.image(for: content, projectID: projectID)
+        // Either both nil (no Metal device on this host) or the identical image.
+        XCTAssertEqual(first == nil, second == nil)
+        if let first, let second {
+            XCTAssertEqual(first.width, second.width)
+            XCTAssertEqual(first.height, second.height)
+        }
+    }
+
+    /// A colour layer has nothing to preview, and must not be given a cache slot.
+    func testAColourLayerHasNoSignatureAndNoPreview() {
+        XCTAssertNil(ContentThumbnailStore.signature(for: .solid))
+        XCTAssertNil(ContentThumbnailStore.shared.image(for: .solid, projectID: UUID()))
+    }
+
+    /// The palette is part of the key: recolour a source and the preview has to
+    /// follow it rather than serve the old render.
+    func testTheSignatureFollowsTheGeneratorPalette() {
+        var warm = GeneratorKind.plasma.defaultSettings
+        warm.palette = .ember
+        var cold = warm
+        cold.palette = .ice
+
+        let warmKey = ContentThumbnailStore.signature(for: .generator(.plasma, warm))
+        let coldKey = ContentThumbnailStore.signature(for: .generator(.plasma, cold))
+        XCTAssertNotNil(warmKey)
+        XCTAssertNotEqual(warmKey, coldKey)
+    }
+
+    /// Two layers showing the same clip share one decode; a clip and a still with the
+    /// same filename do not, because they are decoded by different paths.
+    func testMediaSignaturesAreKeyedByFileAndKind() {
+        let ref = MediaReference(kind: .video, filename: "clip.mov", displayName: "Clip",
+                                 pixelSize: .zero, duration: 3)
+        let asVideo = ContentThumbnailStore.signature(for: .video(ref, VideoPlayback()))
+        let asImage = ContentThumbnailStore.signature(for: .image(ref))
+        XCTAssertNotEqual(asVideo, asImage)
+
+        // Same file, different layer: one key, so it is decoded once.
+        var slower = VideoPlayback()
+        slower.rate = 0.5
+        XCTAssertEqual(asVideo, ContentThumbnailStore.signature(for: .video(ref, slower)))
     }
 }

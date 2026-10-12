@@ -51,11 +51,18 @@ final class SyncSession: NSObject, ObservableObject {
 
     private let log = Logger(subsystem: "app.videomapper", category: "Sync")
     private let localPeerID: MCPeerID
-    private var session: MCSession?
     private var advertiser: MCNearbyServiceAdvertiser?
     private var browser: MCNearbyServiceBrowser?
     private var probeTimer: Timer?
     private var probesSent = 0
+    /// Guards the two things both threads touch. `role` is published for the UI, so
+    /// it is written on the main thread — but the Multipeer queue has to test it on
+    /// every incoming message, and reads the session on every send. The session is
+    /// created and cleared on the main thread, so without this the queue was reading
+    /// the reference while `teardown()` replaced it.
+    private let stateLock = NSLock()
+    private var activeRole: SyncRole = .solo
+    private var activeSession: MCSession?
 
     override init() {
         // Peer display names are limited to 63 bytes.
@@ -70,7 +77,16 @@ final class SyncSession: NSObject, ObservableObject {
 
     var localName: String { localPeerID.displayName }
 
-    var connectedPeers: [MCPeerID] { session?.connectedPeers ?? [] }
+    /// The role as seen from any thread. Use this off the main thread, not `role`.
+    private var currentRole: SyncRole { stateLock.withLock { activeRole } }
+
+    /// The session as seen from any thread, nil once torn down.
+    ///
+    /// Callers bind a strong local reference, so a teardown running alongside them
+    /// cannot pull the session away halfway through a method.
+    private var currentSession: MCSession? { stateLock.withLock { activeSession } }
+
+    var connectedPeers: [MCPeerID] { currentSession?.connectedPeers ?? [] }
 
     // MARK: - Lifecycle
 
@@ -78,6 +94,7 @@ final class SyncSession: NSObject, ObservableObject {
         guard newRole != role else { return }
         teardown()
         role = newRole
+        stateLock.withLock { activeRole = newRole }
         switch newRole {
         case .solo:
             break
@@ -103,7 +120,7 @@ final class SyncSession: NSObject, ObservableObject {
         let session = MCSession(peer: localPeerID, securityIdentity: nil,
                                 encryptionPreference: .required)
         session.delegate = self
-        self.session = session
+        stateLock.withLock { activeSession = session }
     }
 
     private func teardown() {
@@ -114,8 +131,16 @@ final class SyncSession: NSObject, ObservableObject {
         advertiser = nil
         browser?.stopBrowsingForPeers()
         browser = nil
-        session?.disconnect()
-        session = nil
+        let outgoing = stateLock.withLock { () -> MCSession? in
+            let previous = activeSession
+            activeSession = nil
+            return previous
+        }
+        // Disconnecting outside the lock is not tidiness: `disconnect()` makes
+        // Multipeer call back into this object, and those callbacks read the
+        // session. Holding the lock across it would have them wait on the thread
+        // that is waiting on them.
+        outgoing?.disconnect()
         clock.reset()
         DispatchQueue.main.async { [weak self] in
             self?.peers = []
@@ -128,7 +153,7 @@ final class SyncSession: NSObject, ObservableObject {
     // MARK: - Sending
 
     func send(_ message: SyncMessage, reliable: Bool = true) {
-        guard let session, !session.connectedPeers.isEmpty else { return }
+        guard let session = currentSession, !session.connectedPeers.isEmpty else { return }
         do {
             let data = try message.encoded()
             try session.send(data, toPeers: session.connectedPeers,
@@ -139,7 +164,7 @@ final class SyncSession: NSObject, ObservableObject {
     }
 
     func send(_ message: SyncMessage, to peer: MCPeerID) {
-        guard let session else { return }
+        guard let session = currentSession else { return }
         do {
             try session.send(try message.encoded(), toPeers: [peer], with: .reliable)
         } catch {
@@ -155,7 +180,7 @@ final class SyncSession: NSObject, ObservableObject {
         // that tracks drift without flooding the link.
         probeTimer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] timer in
             guard let self else { timer.invalidate(); return }
-            guard self.role == .follower, let session = self.session,
+            guard self.currentRole == .follower, let session = self.currentSession,
                   !session.connectedPeers.isEmpty else { return }
             if self.probesSent > 10, self.probesSent % 5 != 0 {
                 self.probesSent += 1
@@ -179,17 +204,18 @@ final class SyncSession: NSObject, ObservableObject {
     private func handleClockMessage(_ message: SyncMessage, from peer: MCPeerID) -> Bool {
         switch message {
         case .ping(let id, let t0):
-            guard role == .host else { return true }
+            guard currentRole == .host else { return true }
             send(.pong(id: id, t0: t0, t1: HostClock.now), to: peer)
             return true
         case .pong(let id, _, let t1):
-            guard role == .follower else { return true }
+            guard currentRole == .follower else { return true }
             clock.noteReply(id: id, hostTime: t1, localNow: HostClock.now)
+            // Read the estimate here, on the thread that just folded the reply in,
+            // so the three published values cannot come from either side of the
+            // next one.
+            let reading = clock.snapshot()
             DispatchQueue.main.async { [weak self] in
-                guard let self else { return }
-                self.clockOffset = self.clock.offset
-                self.roundTrip = self.clock.roundTrip
-                self.isSynchronized = self.clock.isSynchronized
+                self?.publish(reading)
             }
             return true
         default:
@@ -197,8 +223,22 @@ final class SyncSession: NSObject, ObservableObject {
         }
     }
 
+    /// Publishes a clock reading, unless the run it came from has since ended.
+    ///
+    /// `teardown()` resets the clock and then zeroes these values on the main queue.
+    /// A reply already in flight lands after that, and without this guard it would
+    /// put the old offset back — leaving the UI claiming a lock on a host this
+    /// device is no longer talking to, and `hostNow` returning a time derived from
+    /// it. Dropping the reading is correct: it describes a session that is gone.
+    private func publish(_ reading: ClockSynchronizer.Reading) {
+        guard clock.isCurrent(reading) else { return }
+        clockOffset = reading.offset
+        roundTrip = reading.roundTrip
+        isSynchronized = reading.isSynchronized
+    }
+
     private func refreshPeers() {
-        let connected = session?.connectedPeers ?? []
+        let connected = currentSession?.connectedPeers ?? []
         DispatchQueue.main.async { [weak self] in
             self?.peers = connected.map { SyncPeer(peerID: $0, isConnected: true) }
         }
@@ -211,8 +251,8 @@ extension SyncSession: MCSessionDelegate {
     func session(_ session: MCSession, peer peerID: MCPeerID, didChange state: MCSessionState) {
         refreshPeers()
         guard state == .connected else { return }
-        send(.hello(name: localPeerID.displayName, isHost: role == .host), to: peerID)
-        if role == .follower {
+        send(.hello(name: localPeerID.displayName, isHost: currentRole == .host), to: peerID)
+        if currentRole == .follower {
             // Get a first estimate immediately rather than waiting for the timer.
             sendProbe()
         }
@@ -249,7 +289,7 @@ extension SyncSession: MCNearbyServiceAdvertiserDelegate {
                     didReceiveInvitationFromPeer peerID: MCPeerID,
                     withContext context: Data?,
                     invitationHandler: @escaping (Bool, MCSession?) -> Void) {
-        invitationHandler(true, session)
+        invitationHandler(true, currentSession)
     }
 
     func advertiser(_ advertiser: MCNearbyServiceAdvertiser, didNotStartAdvertisingPeer error: Error) {
@@ -262,7 +302,7 @@ extension SyncSession: MCNearbyServiceAdvertiserDelegate {
 
 extension SyncSession: MCNearbyServiceBrowserDelegate {
     func browser(_ browser: MCNearbyServiceBrowser, foundPeer peerID: MCPeerID, withDiscoveryInfo info: [String: String]?) {
-        guard let session, info?["role"] == "host" else { return }
+        guard let session = currentSession, info?["role"] == "host" else { return }
         browser.invitePeer(peerID, to: session, withContext: nil, timeout: 15)
     }
 
